@@ -14,4 +14,4 @@ A desktop application to generate QR codes from Excel data and export them to a 
 - 🚀 Threaded operations for responsive UI
 
 Created by Johann Sebastian Dulz
-GitHub
+
