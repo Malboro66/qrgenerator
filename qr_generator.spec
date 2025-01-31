@@ -6,7 +6,12 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[],
-    hiddenimports=[],
+    hiddenimports=[
+    'pandas', 
+    'tkinter', 
+    'reportlab',
+    'qrcode',
+    'PIL'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
