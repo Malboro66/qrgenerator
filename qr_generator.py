@@ -1,91 +1,128 @@
 # Importações necessárias
-import tkinter as tk  # Framework para interface gráfica
-from tkinter import filedialog, ttk, messagebox  # Componentes da interface gráfica
-import pandas as pd  # Para manipulação de arquivos Excel/CSV
-import qrcode  # Para gerar códigos QR
-from reportlab.pdfgen import canvas  # Geração de PDF
-from reportlab.lib.pagesizes import A4  # Tamanho de página padrão
-from reportlab.lib.units import cm  # Unidades métricas
-from reportlab.lib.utils import ImageReader  # Para manipular imagens no PDF
-import io  # Para manipulação de fluxos de bytes
-import os  # Operações no sistema de arquivos
-import threading  # Para executar tarefas em segundo plano
-import queue  # Para comunicação segura entre threads
-
+import tkinter as tk
+from tkinter import filedialog, ttk, messagebox
+import pandas as pd
+import qrcode
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import cm
+from reportlab.lib.utils import ImageReader
+import io
+import os
+import threading
+import queue
 
 class QRCodeGenerator:
-    """
-    Classe principal do aplicativo para gerar códigos QR a partir de dados Excel/CSV
-    e salvá-los em PDF.
-    """
     def __init__(self, root):
-        """
-        Inicializa a janela do aplicativo e configura as configurações básicas.
-        
-        Args:
-            root: A janela principal do tkinter
-        """
         self.root = root
         self.root.title("Gerador de QR Codes")
-        self.root.geometry("600x400")  # Define o tamanho da janela
+        self.root.geometry("680x500")
         
-        # Inicializa variáveis de instância
-        self.arquivo_excel = None  # Armazena o caminho do arquivo selecionado
-        self.progress_var = tk.DoubleVar()  # Controla o status da barra de progresso
-        self.fila = queue.Queue()  # Fila de mensagens thread-safe
+        self.arquivo_excel = None
+        self.progress_var = tk.DoubleVar()
+        self.fila = queue.Queue()
+        self.modo = tk.StringVar(value='texto')
         
-        # Cria elementos da interface gráfica
         self.criar_widgets()
-        # Inicia o monitoramento da fila de mensagens
         self.verificar_fila()
 
     def criar_widgets(self):
-        """
-        Cria e organiza todos os elementos da interface gráfica na janela principal.
-        Inclui botões, rótulos, barra de progresso e menu suspenso.
-        """
-        # Frame principal com preenchimento
         main_frame = ttk.Frame(self.root, padding="20")
         main_frame.pack(fill=tk.BOTH, expand=True)
         
-        # Rótulo do título
+        # Seção de título
         title_label = ttk.Label(
             main_frame, 
             text="Gerador de QR Codes em PDF", 
             font=('Helvetica', 16, 'bold')
         )
-        title_label.pack(pady=20)
+        title_label.pack(pady=10)
         
-        # Botão de seleção de arquivo
+        # Seção de seleção de arquivo
+        file_frame = ttk.Frame(main_frame)
+        file_frame.pack(pady=10, fill=tk.X)
+        
         self.select_button = ttk.Button(
-            main_frame,
+            file_frame,
             text="Selecionar Arquivo (Excel/CSV)",
             command=self.selecionar_arquivo
         )
-        self.select_button.pack(pady=10)
+        self.select_button.pack(side=tk.LEFT)
         
-        # Rótulo para mostrar o nome do arquivo selecionado
-        self.file_label = ttk.Label(main_frame, text="Nenhum arquivo selecionado")
-        self.file_label.pack(pady=5)
+        self.file_label = ttk.Label(file_frame, text="Nenhum arquivo selecionado")
+        self.file_label.pack(side=tk.LEFT, padx=10)
         
-        # Frame para o menu suspenso de seleção de coluna
+        # Seção de seleção de coluna
         column_frame = ttk.Frame(main_frame)
-        column_frame.pack(pady=10)
+        column_frame.pack(pady=5, fill=tk.X)
         
-        ttk.Label(column_frame, text="Selecione a coluna dos códigos:").pack(side=tk.LEFT)
-        self.column_combo = ttk.Combobox(column_frame, state="disabled")
+        ttk.Label(column_frame, text="Coluna dos dados:").pack(side=tk.LEFT)
+        self.column_combo = ttk.Combobox(column_frame, state="disabled", width=20)
         self.column_combo.pack(side=tk.LEFT, padx=5)
         
-        # Barra de progresso para status da geração
+        # Seção de configuração do formato
+        format_frame = ttk.LabelFrame(main_frame, text="Configurações do QR Code")
+        format_frame.pack(pady=10, fill=tk.X)
+        
+        # Modo de operação
+        mode_frame = ttk.Frame(format_frame)
+        mode_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Radiobutton(
+            mode_frame,
+            text="Modo Texto",
+            variable=self.modo,
+            value='texto',
+            command=self.atualizar_controles_formato
+        ).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Radiobutton(
+            mode_frame,
+            text="Modo Numérico",
+            variable=self.modo,
+            value='numerico',
+            command=self.atualizar_controles_formato
+        ).pack(side=tk.LEFT, padx=5)
+        
+        # Controles para texto
+        self.texto_controls = ttk.Frame(format_frame)
+        ttk.Label(self.texto_controls, text="Máx. caracteres:").pack(side=tk.LEFT)
+        self.max_caracteres = ttk.Spinbox(self.texto_controls, from_=1, to=1000, width=8)
+        self.max_caracteres.pack(side=tk.LEFT, padx=5)
+        self.max_caracteres.set(250)
+        
+        # Controles para numérico
+        self.numerico_controls = ttk.Frame(format_frame)
+        ttk.Label(self.numerico_controls, text="Total dígitos:").pack(side=tk.LEFT)
+        self.total_digitos = ttk.Spinbox(self.numerico_controls, from_=1, to=50, width=8)
+        self.total_digitos.pack(side=tk.LEFT, padx=5)
+        self.total_digitos.set(10)
+        
+        ttk.Label(self.numerico_controls, text="Adicionar:").pack(side=tk.LEFT, padx=5)
+        self.posicao_numero = ttk.Combobox(self.numerico_controls, 
+                                         values=['Antes', 'Depois'], 
+                                         width=7, state='readonly')
+        self.posicao_numero.pack(side=tk.LEFT, padx=5)
+        self.posicao_numero.set('Antes')
+        
+        self.numero_adicional = ttk.Entry(self.numerico_controls, width=12)
+        self.numero_adicional.pack(side=tk.LEFT, padx=5)
+        
+        self.atualizar_controles_formato()
+        
+        # Seção de progresso
         self.progress_bar = ttk.Progressbar(
             main_frame,
             variable=self.progress_var,
             maximum=100,
             mode='determinate'
         )
-        self.progress_bar.pack(fill=tk.X, pady=20)
+        self.progress_bar.pack(fill=tk.X, pady=10)
         
-        # Botão de geração (inicialmente desativado)
+        self.status_label = ttk.Label(main_frame, text="")
+        self.status_label.pack()
+        
+        # Botão de geração
         self.generate_button = ttk.Button(
             main_frame,
             text="Gerar QR Codes",
@@ -94,61 +131,34 @@ class QRCodeGenerator:
         )
         self.generate_button.pack(pady=10)
         
-        # Rótulo de status para mostrar o progresso
-        self.status_label = ttk.Label(main_frame, text="")
-        self.status_label.pack(pady=5)
-
-        # Rodapé com créditos
+        # Rodapé
         footer_frame = ttk.Frame(main_frame)
-        footer_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=10)
+        footer_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=5)
         
-        credit_label = ttk.Label(
+        ttk.Label(
             footer_frame,
             text="Desenvolvido por Johann Sebastian Dulz",
             font=('Helvetica', 8),
             foreground="#666666"
-        )
-        credit_label.pack(side=tk.RIGHT)
+        ).pack(side=tk.RIGHT)
+
+    def atualizar_controles_formato(self):
+        if self.modo.get() == 'texto':
+            self.texto_controls.pack(fill=tk.X, pady=5)
+            self.numerico_controls.pack_forget()
+        else:
+            self.numerico_controls.pack(fill=tk.X, pady=5)
+            self.texto_controls.pack_forget()
 
     def verificar_extensao(self, arquivo):
-        """
-        Verifica se a extensão do arquivo é suportada (.xlsx, .xls, .csv)
-        
-        Args:
-            arquivo: Caminho do arquivo para verificar
-            
-        Returns:
-            bool: True se a extensão é suportada, False caso contrário
-        """
         extensoes_validas = ('.xlsx', '.xls', '.csv')
         return os.path.splitext(arquivo)[1].lower() in extensoes_validas
 
     def determinar_tipo_arquivo(self, arquivo):
-        """
-        Determina se o arquivo é Excel ou CSV com base na extensão
-        
-        Args:
-            arquivo: Caminho do arquivo
-            
-        Returns:
-            str: 'excel' ou 'csv'
-        """
         extensao = os.path.splitext(arquivo)[1].lower()
         return 'excel' if extensao in ('.xlsx', '.xls') else 'csv'
 
     def ler_arquivo(self, caminho):
-        """
-        Lê o arquivo de entrada (Excel ou CSV) usando pandas
-        
-        Args:
-            caminho: Caminho do arquivo
-            
-        Returns:
-            pandas.DataFrame: Os dados carregados
-            
-        Raises:
-            ValueError: Se o arquivo não puder ser lido
-        """
         try:
             if self.tipo_arquivo == 'excel':
                 return pd.read_excel(caminho)
@@ -156,16 +166,11 @@ class QRCodeGenerator:
                 try:
                     return pd.read_csv(caminho, encoding='utf-8', delimiter=',')
                 except UnicodeDecodeError:
-                    # Tenta codificação alternativa se UTF-8 falhar
                     return pd.read_csv(caminho, encoding='latin-1', delimiter=';')
         except Exception as e:
             raise ValueError(f"Erro na leitura do arquivo: {str(e)}")
 
     def selecionar_arquivo(self):
-        """
-        Manipula a seleção de arquivo via diálogo e carrega o conteúdo do arquivo
-        Atualiza elementos da interface com base na seleção
-        """
         arquivo = filedialog.askopenfilename(
             filetypes=[("Arquivos Suportados", "*.xlsx;*.xls;*.csv"), ("Todos os arquivos", "*.*")]
         )
@@ -174,10 +179,7 @@ class QRCodeGenerator:
             return
             
         if not self.verificar_extensao(arquivo):
-            messagebox.showerror(
-                "Erro de Extensão",
-                "Formato não suportado!\nUse .xlsx, .xls ou .csv"
-            )
+            messagebox.showerror("Erro", "Formato de arquivo não suportado!")
             return
             
         self.arquivo_fonte = arquivo
@@ -196,64 +198,58 @@ class QRCodeGenerator:
             self.limpar_selecao()
 
     def limpar_selecao(self):
-        """Redefine os elementos da interface para o estado inicial"""
         self.arquivo_fonte = None
         self.file_label.config(text="Nenhum arquivo selecionado")
         self.column_combo.set('')
         self.column_combo['state'] = 'disabled'
         self.generate_button['state'] = 'disabled'
 
-    def verificar_fila(self):
-        """
-        Verifica a fila de mensagens para atualizações da thread de trabalho
-        Atualiza a interface com base nas mensagens recebidas
-        """
+    def validar_formato(self):
         try:
-            while True:
-                msg = self.fila.get_nowait()
-                if msg['tipo'] == 'progresso':
-                    self.atualizar_interface_progresso(msg['atual'], msg['total'])
-                elif msg['tipo'] == 'erro':
-                    self.tratar_erro(msg['mensagem'])
-                elif msg['tipo'] == 'sucesso':
-                    self.tratar_sucesso(msg['caminho'])
-        except queue.Empty:
-            pass
-        # Agenda próxima verificação
-        self.root.after(100, self.verificar_fila)
+            if self.modo.get() == 'numerico':
+                if not self.numero_adicional.get().isdigit():
+                    raise ValueError("O número adicional deve conter apenas dígitos")
+                
+                total = int(self.total_digitos.get())
+                add_len = len(self.numero_adicional.get())
+                
+                if add_len >= total:
+                    raise ValueError("O número adicional é maior que o total de dígitos")
+                
+            return True
+        except ValueError as e:
+            self.fila.put({'tipo': 'erro', 'mensagem': str(e)})
+            return False
 
-    def atualizar_interface_progresso(self, atual, total):
-        """Atualiza a barra de progresso e o rótulo de status"""
-        progresso = (atual + 1) / total * 100
-        self.progress_var.set(progresso)
-        self.status_label.config(text=f"Gerando QR Code {atual + 1} de {total}")
-
-    def tratar_erro(self, mensagem):
-        """Manipula e exibe mensagens de erro"""
-        messagebox.showerror("Erro", mensagem)
-        self.redefinir_interface()
-
-    def tratar_sucesso(self, caminho):
-        """Manipula a geração bem-sucedida do PDF"""
-        self.progress_var.set(0)
-        self.status_label.config(text="Concluído!")
-        messagebox.showinfo("Sucesso", f"PDF gerado com sucesso!\nLocal: {caminho}")
-        self.redefinir_interface()
-
-    def redefinir_interface(self):
-        """Redefine os elementos da interface após a conclusão da operação"""
-        self.select_button['state'] = 'normal'
-        self.generate_button['state'] = 'normal'
-        self.column_combo['state'] = 'readonly'
+    def processar_codigos(self, codigos):
+        if self.modo.get() == 'texto':
+            max_chars = int(self.max_caracteres.get())
+            return [str(c)[:max_chars] for c in codigos]
+        else:
+            total_digitos = int(self.total_digitos.get())
+            numero_add = self.numero_adicional.get()
+            add_len = len(numero_add)
+            code_len = total_digitos - add_len
+            posicao = self.posicao_numero.get().lower()
+            
+            processed = []
+            for codigo in codigos:
+                codigo_str = str(codigo).strip()
+                if not codigo_str.isdigit():
+                    raise ValueError(f"Dado não numérico encontrado: {codigo_str}")
+                
+                codigo_ajustado = codigo_str.zfill(code_len)[-code_len:]
+                
+                if posicao == 'antes':
+                    novo_codigo = f"{numero_add}{codigo_ajustado}"
+                else:
+                    novo_codigo = f"{codigo_ajustado}{numero_add}"
+                
+                processed.append(novo_codigo[:total_digitos])
+            
+            return processed
 
     def validar_dados(self):
-        """
-        Valida os dados de entrada do arquivo e coluna selecionados
-        
-        Returns:
-            list: Lista de códigos válidos para gerar QR codes
-            None: Se a validação falhar
-        """
         try:
             df = self.ler_arquivo(self.arquivo_fonte)
             coluna = self.column_combo.get()
@@ -261,12 +257,13 @@ class QRCodeGenerator:
             if coluna not in df.columns:
                 raise ValueError(f"Coluna '{coluna}' não encontrada")
                 
-            codigos = df[coluna].astype(str).str.strip()
+            codigos = df[coluna].astype(str).str.strip().tolist()
             
-            if codigos.empty:
-                raise ValueError("A coluna selecionada está vazia")
-                
-            codigos = codigos[codigos != ''].tolist()
+            if self.modo.get() == 'numerico':
+                if not all(c.isdigit() for c in codigos if c != ''):
+                    raise ValueError("A coluna contém dados não numéricos no modo numérico")
+            
+            codigos = [c for c in codigos if c != '']
             
             if not codigos:
                 raise ValueError("Nenhum código válido encontrado na coluna")
@@ -278,10 +275,9 @@ class QRCodeGenerator:
             return None
 
     def iniciar_geracao(self):
-        """
-        Inicia o processo de geração do código QR
-        Abre diálogo de salvamento e inicia thread de trabalho
-        """
+        if not self.validar_formato():
+            return
+            
         caminho_pdf = filedialog.asksaveasfilename(
             defaultextension=".pdf",
             filetypes=[("Arquivos PDF", "*.pdf")]
@@ -294,39 +290,34 @@ class QRCodeGenerator:
         if not codigos:
             return
             
-        # Desativa elementos da interface durante a geração
+        try:
+            codigos_processados = self.processar_codigos(codigos)
+        except Exception as e:
+            self.fila.put({'tipo': 'erro', 'mensagem': str(e)})
+            return
+            
         self.select_button['state'] = 'disabled'
         self.generate_button['state'] = 'disabled'
         self.column_combo['state'] = 'disabled'
         
-        # Inicia geração em thread de segundo plano
         thread = threading.Thread(
             target=self.gerar_pdf,
-            args=(codigos, caminho_pdf),
+            args=(codigos_processados, caminho_pdf),
             daemon=True
         )
         thread.start()
 
     def gerar_pdf(self, codigos, caminho_pdf):
-        """
-        Gera PDF com códigos QR
-        
-        Args:
-            codigos: Lista de códigos para gerar QR codes
-            caminho_pdf: Caminho do arquivo PDF de saída
-        """
         try:
             pdf = canvas.Canvas(caminho_pdf, pagesize=A4)
             largura, altura = A4
             
-            # Define parâmetros de layout
             tamanho_qr = 5 * cm
             margem = 1 * cm
             colunas = 3
             linhas = 4
             qr_por_pagina = colunas * linhas
             
-            # Configura geração do código QR
             config_qr = qrcode.QRCode(
                 version=1,
                 error_correction=qrcode.constants.ERROR_CORRECT_H,
@@ -334,16 +325,13 @@ class QRCodeGenerator:
                 border=4,
             )
             
-            # Gera códigos QR e adiciona ao PDF
             for indice, codigo in enumerate(codigos):
-                # Atualiza progresso
                 self.fila.put({
                     'tipo': 'progresso',
                     'atual': indice,
                     'total': len(codigos)
                 })
                 
-                # Gera código QR
                 config_qr.clear()
                 config_qr.add_data(codigo)
                 config_qr.make(fit=True)
@@ -353,7 +341,6 @@ class QRCodeGenerator:
                 img.save(buffer_img, format='PNG')
                 buffer_img.seek(0)
                 
-                # Calcula posição na página
                 pagina = indice % qr_por_pagina
                 linha = pagina // colunas
                 coluna = pagina % colunas
@@ -361,7 +348,6 @@ class QRCodeGenerator:
                 x = margem + coluna * (tamanho_qr + margem)
                 y = altura - (margem + (linha + 1) * (tamanho_qr + margem))
                 
-                # Adiciona código QR ao PDF
                 pdf.drawImage(
                     ImageReader(buffer_img),
                     x, 
@@ -370,12 +356,10 @@ class QRCodeGenerator:
                     height=tamanho_qr
                 )
                 
-                # Adiciona texto abaixo do código QR
                 pdf.setFont("Helvetica", 8)
                 texto_largura = pdf.stringWidth(codigo, "Helvetica", 8)
                 pdf.drawString(x + (tamanho_qr - texto_largura)/2, y - 12, codigo)
                 
-                # Inicia nova página se necessário
                 if (indice + 1) % qr_por_pagina == 0 and indice < len(codigos) - 1:
                     pdf.showPage()
 
@@ -385,8 +369,40 @@ class QRCodeGenerator:
         except Exception as e:
             self.fila.put({'tipo': 'erro', 'mensagem': f"Erro na geração: {str(e)}"})
 
+    def verificar_fila(self):
+        try:
+            while True:
+                msg = self.fila.get_nowait()
+                if msg['tipo'] == 'progresso':
+                    self.atualizar_interface_progresso(msg['atual'], msg['total'])
+                elif msg['tipo'] == 'erro':
+                    self.tratar_erro(msg['mensagem'])
+                elif msg['tipo'] == 'sucesso':
+                    self.tratar_sucesso(msg['caminho'])
+        except queue.Empty:
+            pass
+        self.root.after(100, self.verificar_fila)
 
-# Ponto de entrada do aplicativo
+    def atualizar_interface_progresso(self, atual, total):
+        progresso = (atual + 1) / total * 100
+        self.progress_var.set(progresso)
+        self.status_label.config(text=f"Gerando QR Code {atual + 1} de {total}")
+
+    def tratar_erro(self, mensagem):
+        messagebox.showerror("Erro", mensagem)
+        self.redefinir_interface()
+
+    def tratar_sucesso(self, caminho):
+        self.progress_var.set(0)
+        self.status_label.config(text="Concluído!")
+        messagebox.showinfo("Sucesso", f"PDF gerado em:\n{caminho}")
+        self.redefinir_interface()
+
+    def redefinir_interface(self):
+        self.select_button['state'] = 'normal'
+        self.generate_button['state'] = 'normal'
+        self.column_combo['state'] = 'readonly'
+
 if __name__ == "__main__":
     root = tk.Tk()
     app = QRCodeGenerator(root)
