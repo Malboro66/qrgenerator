@@ -15,66 +15,64 @@ import queue
 class QRCodeGenerator:
     def __init__(self, root):
         self.root = root
-        self.root.title("Gerador de QR Codes")
-        self.root.geometry("680x500")
+        self.root.title("Gerador de QR Codes Profissional")
+        self.root.geometry("750x550")
+        self.root.resizable(False, False)  # Janela não redimensionável
         
-        self.arquivo_excel = None
+        self.arquivo_fonte = None
         self.progress_var = tk.DoubleVar()
         self.fila = queue.Queue()
         self.modo = tk.StringVar(value='texto')
         
-        self.criar_widgets()
+        self.criar_interface()
         self.verificar_fila()
 
-    def criar_widgets(self):
-        main_frame = ttk.Frame(self.root, padding="20")
-        main_frame.pack(fill=tk.BOTH, expand=True)
+    def criar_interface(self):
+        # Configuração do layout principal
+        main_frame = ttk.Frame(self.root, padding=20)
+        main_frame.pack(expand=True, fill=tk.BOTH)
         
-        # Seção de título
-        title_label = ttk.Label(
-            main_frame, 
-            text="Gerador de QR Codes em PDF", 
+        # Título centralizado
+        ttk.Label(
+            main_frame,
+            text="Gerador de QR Codes em PDF",
             font=('Helvetica', 16, 'bold')
-        )
-        title_label.pack(pady=10)
-        
+        ).pack(pady=10)
+
         # Seção de seleção de arquivo
-        file_frame = ttk.Frame(main_frame)
-        file_frame.pack(pady=10, fill=tk.X)
+        file_frame = ttk.LabelFrame(main_frame, text="1. Seleção de Dados", padding=15)
+        file_frame.pack(fill=tk.X, pady=5)
         
-        self.select_button = ttk.Button(
+        ttk.Button(
             file_frame,
             text="Selecionar Arquivo (Excel/CSV)",
             command=self.selecionar_arquivo
-        )
-        self.select_button.pack(side=tk.LEFT)
+        ).pack(side=tk.TOP, pady=5)
         
         self.file_label = ttk.Label(file_frame, text="Nenhum arquivo selecionado")
-        self.file_label.pack(side=tk.LEFT, padx=10)
-        
+        self.file_label.pack(side=tk.TOP)
+
         # Seção de seleção de coluna
-        column_frame = ttk.Frame(main_frame)
-        column_frame.pack(pady=5, fill=tk.X)
-        
-        ttk.Label(column_frame, text="Coluna dos dados:").pack(side=tk.LEFT)
-        self.column_combo = ttk.Combobox(column_frame, state="disabled", width=20)
-        self.column_combo.pack(side=tk.LEFT, padx=5)
-        
-        # Seção de configuração do formato
-        format_frame = ttk.LabelFrame(main_frame, text="Configurações do QR Code")
-        format_frame.pack(pady=10, fill=tk.X)
-        
-        # Modo de operação
-        mode_frame = ttk.Frame(format_frame)
+        column_frame = ttk.Frame(file_frame)
+        column_frame.pack(pady=10)
+        ttk.Label(column_frame, text="Coluna com os dados:").pack(side=tk.LEFT)
+        self.column_combo = ttk.Combobox(column_frame, state="disabled", width=25)
+        self.column_combo.pack(side=tk.LEFT, padx=10)
+
+        # Seção de configurações
+        config_frame = ttk.LabelFrame(main_frame, text="2. Configurações do QR Code", padding=15)
+        config_frame.pack(fill=tk.X, pady=10)
+
+        # Controles de modo
+        mode_frame = ttk.Frame(config_frame)
         mode_frame.pack(fill=tk.X, pady=5)
-        
         ttk.Radiobutton(
             mode_frame,
             text="Modo Texto",
             variable=self.modo,
             value='texto',
             command=self.atualizar_controles_formato
-        ).pack(side=tk.LEFT, padx=5)
+        ).pack(side=tk.LEFT, padx=15)
         
         ttk.Radiobutton(
             mode_frame,
@@ -82,26 +80,29 @@ class QRCodeGenerator:
             variable=self.modo,
             value='numerico',
             command=self.atualizar_controles_formato
-        ).pack(side=tk.LEFT, padx=5)
-        
+        ).pack(side=tk.LEFT, padx=15)
+
         # Controles para texto
-        self.texto_controls = ttk.Frame(format_frame)
-        ttk.Label(self.texto_controls, text="Máx. caracteres:").pack(side=tk.LEFT)
+        self.texto_controls = ttk.Frame(config_frame)
+        ttk.Label(self.texto_controls, text="Máximo de caracteres:").pack(side=tk.LEFT)
         self.max_caracteres = ttk.Spinbox(self.texto_controls, from_=1, to=1000, width=8)
         self.max_caracteres.pack(side=tk.LEFT, padx=5)
         self.max_caracteres.set(250)
-        
+
         # Controles para numérico
-        self.numerico_controls = ttk.Frame(format_frame)
-        ttk.Label(self.numerico_controls, text="Total dígitos:").pack(side=tk.LEFT)
+        self.numerico_controls = ttk.Frame(config_frame)
+        ttk.Label(self.numerico_controls, text="Total de dígitos:").pack(side=tk.LEFT)
         self.total_digitos = ttk.Spinbox(self.numerico_controls, from_=1, to=50, width=8)
         self.total_digitos.pack(side=tk.LEFT, padx=5)
         self.total_digitos.set(10)
         
-        ttk.Label(self.numerico_controls, text="Adicionar:").pack(side=tk.LEFT, padx=5)
-        self.posicao_numero = ttk.Combobox(self.numerico_controls, 
-                                         values=['Antes', 'Depois'], 
-                                         width=7, state='readonly')
+        ttk.Label(self.numerico_controls, text="Adicionar número:").pack(side=tk.LEFT, padx=5)
+        self.posicao_numero = ttk.Combobox(
+            self.numerico_controls,
+            values=['Antes', 'Depois'],
+            width=7,
+            state='readonly'
+        )
         self.posicao_numero.pack(side=tk.LEFT, padx=5)
         self.posicao_numero.set('Antes')
         
@@ -109,35 +110,39 @@ class QRCodeGenerator:
         self.numero_adicional.pack(side=tk.LEFT, padx=5)
         
         self.atualizar_controles_formato()
-        
+
         # Seção de progresso
+        progress_frame = ttk.LabelFrame(main_frame, text="3. Progresso", padding=15)
+        progress_frame.pack(fill=tk.X, pady=10)
+        
         self.progress_bar = ttk.Progressbar(
-            main_frame,
+            progress_frame,
             variable=self.progress_var,
             maximum=100,
             mode='determinate'
         )
-        self.progress_bar.pack(fill=tk.X, pady=10)
+        self.progress_bar.pack(fill=tk.X)
         
-        self.status_label = ttk.Label(main_frame, text="")
-        self.status_label.pack()
-        
-        # Botão de geração
+        self.status_label = ttk.Label(progress_frame, text="Aguardando início...")
+        self.status_label.pack(pady=5)
+
+        # Botão de ação principal
+        btn_frame = ttk.Frame(main_frame)
+        btn_frame.pack(pady=15)
         self.generate_button = ttk.Button(
-            main_frame,
-            text="Gerar QR Codes",
+            btn_frame,
+            text="Gerar QR Codes em PDF",
             command=self.iniciar_geracao,
             state="disabled"
         )
-        self.generate_button.pack(pady=10)
-        
+        self.generate_button.pack()
+
         # Rodapé
         footer_frame = ttk.Frame(main_frame)
-        footer_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=5)
-        
+        footer_frame.pack(side=tk.BOTTOM, fill=tk.X)
         ttk.Label(
             footer_frame,
-            text="Desenvolvido por Johann Sebastian Dulz",
+            text="Desenvolvido por Johann Sebastian Dulz | Versão 2.0",
             font=('Helvetica', 8),
             foreground="#666666"
         ).pack(side=tk.RIGHT)
@@ -214,7 +219,7 @@ class QRCodeGenerator:
                 add_len = len(self.numero_adicional.get())
                 
                 if add_len >= total:
-                    raise ValueError("O número adicional é maior que o total de dígitos")
+                    raise ValueError("O número adicional não pode ser maior que o total de dígitos")
                 
             return True
         except ValueError as e:
@@ -255,18 +260,18 @@ class QRCodeGenerator:
             coluna = self.column_combo.get()
             
             if coluna not in df.columns:
-                raise ValueError(f"Coluna '{coluna}' não encontrada")
+                raise ValueError(f"Coluna '{coluna}' não encontrada no arquivo")
                 
             codigos = df[coluna].astype(str).str.strip().tolist()
             
             if self.modo.get() == 'numerico':
                 if not all(c.isdigit() for c in codigos if c != ''):
-                    raise ValueError("A coluna contém dados não numéricos no modo numérico")
+                    raise ValueError("Modo numérico selecionado, mas a coluna contém dados não numéricos")
             
             codigos = [c for c in codigos if c != '']
             
             if not codigos:
-                raise ValueError("Nenhum código válido encontrado na coluna")
+                raise ValueError("Nenhum dado válido encontrado na coluna selecionada")
                 
             return codigos
             
@@ -280,7 +285,7 @@ class QRCodeGenerator:
             
         caminho_pdf = filedialog.asksaveasfilename(
             defaultextension=".pdf",
-            filetypes=[("Arquivos PDF", "*.pdf")]
+            filetypes=[("Documento PDF", "*.pdf")]
         )
         
         if not caminho_pdf:
@@ -296,9 +301,7 @@ class QRCodeGenerator:
             self.fila.put({'tipo': 'erro', 'mensagem': str(e)})
             return
             
-        self.select_button['state'] = 'disabled'
-        self.generate_button['state'] = 'disabled'
-        self.column_combo['state'] = 'disabled'
+        self.alterar_estado_interface(False)
         
         thread = threading.Thread(
             target=self.gerar_pdf,
@@ -367,41 +370,49 @@ class QRCodeGenerator:
             self.fila.put({'tipo': 'sucesso', 'caminho': caminho_pdf})
             
         except Exception as e:
-            self.fila.put({'tipo': 'erro', 'mensagem': f"Erro na geração: {str(e)}"})
+            self.fila.put({'tipo': 'erro', 'mensagem': f"Erro na geração do PDF: {str(e)}"})
 
     def verificar_fila(self):
         try:
             while True:
                 msg = self.fila.get_nowait()
                 if msg['tipo'] == 'progresso':
-                    self.atualizar_interface_progresso(msg['atual'], msg['total'])
+                    self.atualizar_progresso(msg['atual'], msg['total'])
                 elif msg['tipo'] == 'erro':
-                    self.tratar_erro(msg['mensagem'])
+                    self.mostrar_erro(msg['mensagem'])
                 elif msg['tipo'] == 'sucesso':
-                    self.tratar_sucesso(msg['caminho'])
+                    self.mostrar_sucesso(msg['caminho'])
         except queue.Empty:
             pass
         self.root.after(100, self.verificar_fila)
 
-    def atualizar_interface_progresso(self, atual, total):
+    def atualizar_progresso(self, atual, total):
         progresso = (atual + 1) / total * 100
         self.progress_var.set(progresso)
-        self.status_label.config(text=f"Gerando QR Code {atual + 1} de {total}")
+        self.status_label.config(text=f"Processando: {atual + 1}/{total} QR Codes")
 
-    def tratar_erro(self, mensagem):
-        messagebox.showerror("Erro", mensagem)
-        self.redefinir_interface()
+    def mostrar_erro(self, mensagem):
+        messagebox.showerror("Erro na Execução", mensagem)
+        self.alterar_estado_interface(True)
 
-    def tratar_sucesso(self, caminho):
+    def mostrar_sucesso(self, caminho):
         self.progress_var.set(0)
-        self.status_label.config(text="Concluído!")
-        messagebox.showinfo("Sucesso", f"PDF gerado em:\n{caminho}")
-        self.redefinir_interface()
+        self.status_label.config(text="Processo concluído com sucesso!")
+        messagebox.showinfo(
+            "Sucesso", 
+            f"PDF gerado com sucesso!\n\nLocal: {caminho}"
+        )
+        self.alterar_estado_interface(True)
 
-    def redefinir_interface(self):
-        self.select_button['state'] = 'normal'
-        self.generate_button['state'] = 'normal'
-        self.column_combo['state'] = 'readonly'
+    def alterar_estado_interface(self, habilitar):
+        estados = 'normal' if habilitar else 'disabled'
+        self.select_button['state'] = estados
+        self.generate_button['state'] = estados
+        self.column_combo['state'] = 'readonly' if habilitar else 'disabled'
+        self.texto_controls.winfo_children()[1]['state'] = estados
+        self.numerico_controls.winfo_children()[1]['state'] = estados
+        self.posicao_numero['state'] = 'readonly' if habilitar else 'disabled'
+        self.numero_adicional['state'] = estados
 
 if __name__ == "__main__":
     root = tk.Tk()
