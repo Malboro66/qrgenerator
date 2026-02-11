@@ -3,7 +3,7 @@
 ![Python](https://img.shields.io/badge/Python-3.7%2B-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
-A professional desktop application for generating and customizing QR codes from data in Excel or CSV files. The application provides a user-friendly interface to create QR codes in various formats, tailored to your needs.
+A professional desktop application for generating and customizing QR codes **and Code128 barcodes** from data in Excel or CSV files. The application provides a user-friendly interface to create visual codes in various formats, tailored to your needs.
 
 ## Features
 
@@ -19,8 +19,11 @@ A professional desktop application for generating and customizing QR codes from 
     - **Colors**: Choose custom foreground and background colors.
     - **Logo Integration**: Add your own logo to the center of the QR codes.
 - **Generation Modes**:
-    - **Text Mode**: For general-purpose QR codes with text-based data.
+    - **Text Mode**: For general-purpose codes with text-based data.
     - **Numeric Mode**: Specialized mode for numeric data, with options to prepend or append numbers.
+- **Code Type Selection**:
+    - **QR Code**: Traditional QR generation.
+    - **Barcode (Code128)**: Linear barcode option for labels and inventory.
 - **Responsive Interface**: Asynchronous processing ensures the application remains responsive during QR code generation.
 - **Real-Time Progress**: A progress bar and status updates keep you informed during the generation process.
 
@@ -59,7 +62,7 @@ pip install pandas qrcode reportlab pillow openpyxl
 
 ## Known Issues
 
--   **SVG Export**: The option to export QR codes as SVG files is present in the UI, but the functionality is not yet implemented.
+-   **Barcode SVG Export**: SVG export is currently available for QR Code only.
 
 ## Credits
 
