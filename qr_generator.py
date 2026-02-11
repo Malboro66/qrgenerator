@@ -1,29 +1,148 @@
 import io
+import csv
 import os
 import queue
 import tempfile
+import threading
+import traceback
 import zipfile
 from dataclasses import dataclass
-
-import pandas as pd
 import qrcode
 from PIL import Image, ImageTk
 from qrcode.image.svg import SvgImage
 from reportlab.graphics import renderPM
-from reportlab.graphics.barcode import code128
-from reportlab.graphics.shapes import Drawing
+from reportlab.graphics.barcode import createBarcodeDrawing
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
-
 
 @dataclass
 class ItemCodigo:
     """Representa um item que será convertido em código visual."""
 
     valor: str
+
+
+@dataclass
+class GeracaoConfig:
+    qr_size: int
+    foreground: str
+    background: str
+    tipo_codigo: str
+    modo: str
+    prefixo: str
+    sufixo: str
+    max_codigos_por_lote: int = 5000
+    max_tamanho_dado: int = 512
+
+
+class CodigoService:
+    """Camada de negócio para carga, validação e geração de códigos."""
+
+    @staticmethod
+    def formatar_excecao(exc: Exception, contexto: str) -> str:
+        return f"{contexto}: {exc}"
+
+    @staticmethod
+    def carregar_tabela(caminho):
+        if caminho.lower().endswith('.csv'):
+            try:
+                import pandas as pd
+                return pd.read_csv(caminho)
+            except ImportError:
+                with open(caminho, newline='', encoding='utf-8-sig') as f:
+                    return list(csv.DictReader(f))
+            except (OSError, UnicodeDecodeError, ValueError) as exc:
+                raise RuntimeError(CodigoService.formatar_excecao(exc, 'Falha ao carregar CSV')) from exc
+
+        try:
+            import pandas as pd
+            return pd.read_excel(caminho)
+        except ImportError as exc:
+            raise RuntimeError(
+                "Falha ao carregar Excel. Instale/repare 'pandas', 'numpy' e 'openpyxl' no ambiente."
+            ) from exc
+        except (OSError, ValueError) as exc:
+            raise RuntimeError(CodigoService.formatar_excecao(exc, 'Falha ao carregar Excel')) from exc
+
+    @staticmethod
+    def obter_colunas(tabela):
+        if tabela is None:
+            return []
+        if hasattr(tabela, 'columns'):
+            return list(tabela.columns)
+        if isinstance(tabela, list) and tabela:
+            return list(tabela[0].keys())
+        return []
+
+    @staticmethod
+    def obter_valores_coluna(tabela, coluna):
+        if hasattr(tabela, '__getitem__') and hasattr(tabela, 'columns'):
+            return [str(v) for v in tabela[coluna].dropna().tolist()]
+        if isinstance(tabela, list):
+            vals=[]
+            for linha in tabela:
+                valor=linha.get(coluna)
+                if valor is not None and str(valor).strip() != '':
+                    vals.append(str(valor))
+            return vals
+        return []
+
+    @staticmethod
+    def sanitizar_nome_arquivo(nome: str, fallback: str) -> str:
+        nome_limpo = ''.join('_' if c in '\\/:*?"<>|' else c for c in str(nome))
+        nome_limpo = nome_limpo.strip().strip('.')
+        return nome_limpo or fallback
+
+    @staticmethod
+    def normalizar_dado(valor: str, cfg: GeracaoConfig) -> str:
+        valor = str(valor)
+        if cfg.modo == 'numerico':
+            return f"{cfg.prefixo}{valor}{cfg.sufixo}"
+        return valor
+
+    @staticmethod
+    def validar_parametros_geracao(codigos, cfg: GeracaoConfig):
+        if not isinstance(codigos, list) or not codigos:
+            raise ValueError('Nenhum código válido foi encontrado para geração.')
+        if len(codigos) > cfg.max_codigos_por_lote:
+            raise ValueError(f'Limite excedido: máximo de {cfg.max_codigos_por_lote} códigos por geração.')
+        if cfg.qr_size < 80 or cfg.qr_size > 1200:
+            raise ValueError('Tamanho inválido. Use um valor entre 80 e 1200 pixels.')
+
+        validos=[]
+        invalidos=0
+        for bruto in codigos:
+            dado = CodigoService.normalizar_dado(bruto, cfg)
+            if not dado or not dado.strip() or len(dado) > cfg.max_tamanho_dado:
+                invalidos += 1
+                continue
+            if cfg.tipo_codigo == 'barcode' and any(ord(ch) < 32 for ch in dado):
+                invalidos += 1
+                continue
+            validos.append(str(bruto))
+
+        if not validos:
+            raise ValueError('Todos os dados foram rejeitados pela validação de entrada.')
+        return validos, invalidos
+
+    @staticmethod
+    def gerar_imagem_obj(dado: str, cfg: GeracaoConfig) -> Image.Image:
+        if cfg.tipo_codigo == 'barcode':
+            desenho = createBarcodeDrawing('Code128', value=dado, barHeight=20 * mm, barWidth=0.45, humanReadable=True)
+            return renderPM.drawToPIL(desenho, dpi=200).convert('RGB')
+        qr = qrcode.QRCode(box_size=10, border=2)
+        qr.add_data(dado)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color=cfg.foreground, back_color=cfg.background)
+        if hasattr(img, 'get_image'):
+            img = img.get_image()
+        if not isinstance(img, Image.Image):
+            img = Image.open(io.BytesIO(img.tobytes()))
+        return img.convert('RGB')
 
 
 class QRCodeGenerator:
@@ -35,6 +154,7 @@ class QRCodeGenerator:
         self.root.geometry("980x680")
 
         self.fila = queue.Queue()
+        self.service = CodigoService()
         self.df = None
         self.arquivo_fonte = ""
         self.preview_image_ref = None
@@ -48,17 +168,21 @@ class QRCodeGenerator:
 
         self.prefixo_numerico = tk.StringVar(value="")
         self.sufixo_numerico = tk.StringVar(value="")
+        self.max_codigos_por_lote = 5000
+        self.max_tamanho_dado = 512
 
         self._criar_interface()
         self.atualizar_preview()
+        self._geracao_em_andamento = False
+        self._carregamento_em_andamento = False
+        self.root.after(100, self.verificar_fila)
 
     def _criar_interface(self):
         topo = ttk.Frame(self.root, padding=10)
         topo.pack(fill="x")
 
-        ttk.Button(topo, text="Selecionar Arquivo", command=self.selecionar_arquivo).grid(
-            row=0, column=0, padx=5, pady=5, sticky="w"
-        )
+        self.select_button = ttk.Button(topo, text="Selecionar Arquivo", command=self.selecionar_arquivo)
+        self.select_button.grid(row=0, column=0, padx=5, pady=5, sticky="w")
 
         self.column_combo = ttk.Combobox(topo, state="disabled", width=35)
         self.column_combo.grid(row=0, column=1, padx=5, pady=5, sticky="w")
@@ -123,6 +247,17 @@ class QRCodeGenerator:
         self.preview_label = ttk.Label(preview_frame)
         self.preview_label.pack(expand=True)
 
+        self.progress_frame = ttk.Frame(self.root, padding=(10, 0, 10, 10))
+        self.progress_frame.pack(fill="x")
+
+        self.progress_label_var = tk.StringVar(value="")
+        self.progress_label = ttk.Label(self.progress_frame, textvariable=self.progress_label_var)
+        self.progress_label.pack(anchor="w")
+
+        self.progress_bar = ttk.Progressbar(self.progress_frame, mode="determinate", maximum=100)
+        self.progress_bar.pack(fill="x", pady=(4, 0))
+        self.progress_frame.pack_forget()
+
     def atualizar_controles_formato(self):
         if self.modo.get() == "texto":
             self.numerico_controls.grid_forget()
@@ -132,6 +267,9 @@ class QRCodeGenerator:
             self.numerico_controls.grid(row=3, column=0, columnspan=3, sticky="w", padx=5, pady=3)
 
     def selecionar_arquivo(self):
+        if self._carregamento_em_andamento or self._geracao_em_andamento:
+            return
+
         caminho = filedialog.askopenfilename(
             title="Selecione CSV ou Excel",
             filetypes=[("Arquivos de dados", "*.csv *.xlsx")],
@@ -139,52 +277,63 @@ class QRCodeGenerator:
         if not caminho:
             return
 
-        try:
-            if caminho.lower().endswith(".csv"):
-                self.df = pd.read_csv(caminho)
-            else:
-                self.df = pd.read_excel(caminho)
-        except Exception as exc:
-            messagebox.showerror("Erro", f"Não foi possível abrir o arquivo: {exc}")
-            self.column_combo.configure(state="disabled", values=[])
-            self.generate_button.configure(state="disabled")
-            return
+        self._carregamento_em_andamento = True
+        self.progress_bar.stop()
+        self.progress_bar.configure(mode="indeterminate")
+        self.progress_bar["value"] = 0
+        self.progress_bar.start(10)
+        self.progress_label_var.set("Carregando arquivo, aguarde...")
+        self.progress_frame.pack(fill="x")
+        self.select_button.configure(state="disabled")
+        self.generate_button.configure(state="disabled")
 
-        self.arquivo_fonte = caminho
-        colunas = list(self.df.columns)
-        self.column_combo.configure(values=colunas, state="readonly")
-        if colunas:
-            self.column_combo.set(colunas[0])
-            self.generate_button.configure(state="normal")
-        else:
-            self.generate_button.configure(state="disabled")
+        worker = threading.Thread(target=self._executar_carregamento, args=(caminho,), daemon=True)
+        worker.start()
+
+    def _executar_carregamento(self, caminho):
+        try:
+            tabela = self._carregar_tabela(caminho)
+            self.fila.put({"tipo": "carregamento_sucesso", "caminho": caminho, "tabela": tabela})
+        except Exception as exc:
+            self.fila.put({"tipo": "carregamento_erro", "msg": str(exc)})
+
+    def _formatar_excecao(self, exc: Exception, contexto: str) -> str:
+        return self.service.formatar_excecao(exc, contexto)
+
+    def _carregar_tabela(self, caminho):
+        """Carrega CSV/XLSX com fallback quando pandas/numpy não estiverem disponíveis."""
+        return self.service.carregar_tabela(caminho)
+
+    def _obter_colunas(self, tabela):
+        return self.service.obter_colunas(tabela)
+
+    def _obter_valores_coluna(self, tabela, coluna):
+        return self.service.obter_valores_coluna(tabela, coluna)
+
+    def _build_config(self) -> GeracaoConfig:
+        return GeracaoConfig(
+            qr_size=int(self.qr_size.get()),
+            foreground=self.qr_foreground_color.get(),
+            background=self.qr_background_color.get(),
+            tipo_codigo=self.tipo_codigo.get(),
+            modo=self.modo.get(),
+            prefixo=self.prefixo_numerico.get(),
+            sufixo=self.sufixo_numerico.get(),
+            max_codigos_por_lote=self.max_codigos_por_lote,
+            max_tamanho_dado=self.max_tamanho_dado,
+        )
+
+    def _validar_parametros_geracao(self, codigos):
+        return self.service.validar_parametros_geracao(codigos, self._build_config())
+
+    def _sanitizar_nome_arquivo(self, nome: str, fallback: str) -> str:
+        return self.service.sanitizar_nome_arquivo(nome, fallback)
 
     def _normalizar_dado(self, valor: str) -> str:
-        valor = str(valor)
-        if self.modo.get() == "numerico":
-            return f"{self.prefixo_numerico.get()}{valor}{self.sufixo_numerico.get()}"
-        return valor
+        return self.service.normalizar_dado(valor, self._build_config())
 
     def _gerar_imagem_obj(self, dado: str) -> Image.Image:
-        if self.tipo_codigo.get() == "barcode":
-            barcode = code128.Code128(dado, barHeight=20 * mm, barWidth=0.45)
-            desenho = Drawing(self.qr_size.get(), int(self.qr_size.get() * 0.45))
-            desenho.add(barcode)
-            pil_image = renderPM.drawToPIL(desenho, dpi=200)
-            return pil_image.convert("RGB")
-
-        qr = qrcode.QRCode(box_size=10, border=2)
-        qr.add_data(dado)
-        qr.make(fit=True)
-        img = qr.make_image(
-            fill_color=self.qr_foreground_color.get(),
-            back_color=self.qr_background_color.get(),
-        )
-        if hasattr(img, "get_image"):
-            img = img.get_image()
-        if not isinstance(img, Image.Image):
-            img = Image.open(io.BytesIO(img.tobytes()))
-        return img.convert("RGB")
+        return self.service.gerar_imagem_obj(dado, self._build_config())
 
     def atualizar_preview(self):
         amostra = self._normalizar_dado("123456789")
@@ -193,91 +342,204 @@ class QRCodeGenerator:
         self.preview_image_ref = ImageTk.PhotoImage(img)
         self.preview_label.configure(image=self.preview_image_ref)
 
-    def gerar_imagens(self, codigos, formato, destino):
-        os.makedirs(destino, exist_ok=True)
-        total = len(codigos)
+    def gerar_imagens(self, codigos, formato, destino, emitir_sucesso=True):
+        try:
+            os.makedirs(destino, exist_ok=True)
+            total = len(codigos)
 
-        for i, codigo in enumerate(codigos, start=1):
-            dado = self._normalizar_dado(codigo)
-            if formato == "svg":
-                if self.tipo_codigo.get() == "barcode":
-                    raise ValueError("Exportação SVG para código de barras não suportada nesta versão.")
-                qr = qrcode.make(dado, image_factory=SvgImage)
-                caminho_saida = os.path.join(destino, f"{codigo}.svg")
-                with open(caminho_saida, "wb") as f:
-                    qr.save(f)
-            else:
-                imagem = self._gerar_imagem_obj(dado)
-                imagem.save(os.path.join(destino, f"{codigo}.png"), format="PNG")
+            nomes_usados = set()
+            for i, codigo in enumerate(codigos, start=1):
+                dado = self._normalizar_dado(codigo)
+                nome_base = self._sanitizar_nome_arquivo(codigo, f"codigo_{i}")
+                nome_arquivo = nome_base
+                sufixo = 2
+                while nome_arquivo in nomes_usados:
+                    nome_arquivo = f"{nome_base}_{sufixo}"
+                    sufixo += 1
+                nomes_usados.add(nome_arquivo)
 
-            self.fila.put({"tipo": "progresso", "atual": i, "total": total, "codigo": codigo})
+                if formato == "svg":
+                    if self.tipo_codigo.get() == "barcode":
+                        raise ValueError("Exportação SVG para código de barras não suportada nesta versão.")
+                    qr = qrcode.make(dado, image_factory=SvgImage)
+                    caminho_saida = os.path.join(destino, f"{nome_arquivo}.svg")
+                    with open(caminho_saida, "wb") as f:
+                        qr.save(f)
+                else:
+                    imagem = self._gerar_imagem_obj(dado)
+                    imagem.save(os.path.join(destino, f"{nome_arquivo}.png"), format="PNG")
 
-        self.fila.put({"tipo": "sucesso", "caminho": destino})
+                self.fila.put({"tipo": "progresso", "atual": i, "total": total, "codigo": codigo})
+
+            if emitir_sucesso:
+                self.fila.put({"tipo": "sucesso", "caminho": destino})
+        except (OSError, ValueError) as exc:
+            raise RuntimeError(self._formatar_excecao(exc, "Erro ao gerar imagens")) from exc
 
     def gerar_zip(self, codigos, caminho_zip):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            self.gerar_imagens(codigos, "png", tmpdir)
-            with zipfile.ZipFile(caminho_zip, "w", zipfile.ZIP_DEFLATED) as zf:
-                for codigo in codigos:
-                    nome = f"{codigo}.png"
-                    zf.write(os.path.join(tmpdir, nome), arcname=nome)
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                self.gerar_imagens(codigos, "png", tmpdir, emitir_sucesso=False)
+                with zipfile.ZipFile(caminho_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+                    for nome in os.listdir(tmpdir):
+                        if nome.lower().endswith('.png'):
+                            zf.write(os.path.join(tmpdir, nome), arcname=nome)
+            self.fila.put({"tipo": "sucesso", "caminho": caminho_zip})
+        except (OSError, zipfile.BadZipFile, RuntimeError) as exc:
+            raise RuntimeError(self._formatar_excecao(exc, "Erro ao gerar ZIP")) from exc
 
     def gerar_pdf(self, codigos, caminho_pdf):
-        pdf = canvas.Canvas(caminho_pdf, pagesize=A4)
-        largura_pagina, altura_pagina = A4
+        try:
+            pdf = canvas.Canvas(caminho_pdf, pagesize=A4)
+            largura_pagina, altura_pagina = A4
 
-        x = 20 * mm
-        y = altura_pagina - 40 * mm
-        tamanho = 35 * mm
-        margem = 10 * mm
+            x = 20 * mm
+            y = altura_pagina - 40 * mm
+            tamanho = 35 * mm
+            margem = 10 * mm
+            total = len(codigos)
 
-        for codigo in codigos:
-            imagem = self._gerar_imagem_obj(self._normalizar_dado(codigo))
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-                temp_path = tmp.name
-                imagem.save(temp_path, format="PNG")
+            for i, codigo in enumerate(codigos, start=1):
+                imagem = self._gerar_imagem_obj(self._normalizar_dado(codigo))
+                buffer = io.BytesIO()
+                imagem.save(buffer, format="PNG")
+                buffer.seek(0)
+                image_reader = ImageReader(buffer)
 
-            pdf.drawImage(temp_path, x, y, width=tamanho, height=tamanho, preserveAspectRatio=True)
-            os.unlink(temp_path)
+                pdf.drawImage(image_reader, x, y, width=tamanho, height=tamanho, preserveAspectRatio=True)
+                self.fila.put({"tipo": "progresso", "atual": i, "total": total, "codigo": codigo})
 
-            x += tamanho + margem
-            if x + tamanho > largura_pagina - 20 * mm:
-                x = 20 * mm
-                y -= tamanho + margem
+                x += tamanho + margem
+                if x + tamanho > largura_pagina - 20 * mm:
+                    x = 20 * mm
+                    y -= tamanho + margem
 
-            if y < 20 * mm:
-                pdf.showPage()
-                x = 20 * mm
-                y = altura_pagina - 40 * mm
+                if y < 20 * mm:
+                    pdf.showPage()
+                    x = 20 * mm
+                    y = altura_pagina - 40 * mm
 
-        pdf.save()
+            pdf.save()
+            self.fila.put({"tipo": "sucesso", "caminho": caminho_pdf})
+        except (OSError, ValueError, RuntimeError) as exc:
+            raise RuntimeError(self._formatar_excecao(exc, "Erro ao gerar PDF")) from exc
+
+    def _iniciar_progresso(self, total):
+        self._geracao_em_andamento = True
+        self.progress_bar.stop()
+        self.progress_bar.configure(mode="determinate", maximum=max(total, 1))
+        self.progress_bar["value"] = 0
+        self.progress_label_var.set(f"Gerando 0/{total}...")
+        self.progress_frame.pack(fill="x")
+        self.generate_button.configure(state="disabled")
+        self.select_button.configure(state="disabled")
+
+    def _finalizar_progresso(self):
+        self._geracao_em_andamento = False
+        self._carregamento_em_andamento = False
+        self.progress_bar.stop()
+        self.progress_frame.pack_forget()
+        self.select_button.configure(state="normal")
+        if self.df is not None and self.column_combo.get():
+            self.generate_button.configure(state="normal")
+
+    def verificar_fila(self):
+        try:
+            while True:
+                msg = self.fila.get_nowait()
+                if msg["tipo"] == "progresso":
+                    atual = msg.get("atual", 0)
+                    total = msg.get("total", 1)
+                    self.progress_bar.configure(maximum=max(total, 1))
+                    self.progress_bar["value"] = atual
+                    self.progress_label_var.set(f"Gerando {atual}/{total}: {msg.get('codigo', '')}")
+                elif msg["tipo"] == "sucesso":
+                    self._finalizar_progresso()
+                    messagebox.showinfo("Sucesso", f"Arquivo(s) gerado(s) em: {msg.get('caminho', '')}")
+                elif msg["tipo"] == "erro":
+                    self._finalizar_progresso()
+                    detalhe = msg.get("detalhe", "")
+                    erro_msg = msg.get("msg", "Falha durante a geração.")
+                    if detalhe:
+                        erro_msg = f"{erro_msg}\n\nDetalhes técnicos:\n{detalhe}"
+                    messagebox.showerror("Erro", erro_msg)
+                elif msg["tipo"] == "carregamento_sucesso":
+                    self.progress_bar.stop()
+                    self.progress_frame.pack_forget()
+                    self._carregamento_em_andamento = False
+                    self.select_button.configure(state="normal")
+                    self.df = msg["tabela"]
+                    self.arquivo_fonte = msg["caminho"]
+                    colunas = self._obter_colunas(self.df)
+                    self.column_combo.configure(values=colunas, state="readonly")
+                    if colunas:
+                        self.column_combo.set(colunas[0])
+                        self.generate_button.configure(state="normal")
+                    else:
+                        self.generate_button.configure(state="disabled")
+                elif msg["tipo"] == "carregamento_erro":
+                    self.progress_bar.stop()
+                    self.progress_frame.pack_forget()
+                    self._carregamento_em_andamento = False
+                    self.select_button.configure(state="normal")
+                    self.column_combo.configure(state="disabled", values=[])
+                    self.generate_button.configure(state="disabled")
+                    messagebox.showerror("Erro", f"Não foi possível abrir o arquivo: {msg.get('msg', '')}")
+        except queue.Empty:
+            pass
+
+        self.root.after(100, self.verificar_fila)
+
+    def _executar_geracao(self, codigos, formato, destino):
+        try:
+            if formato == "pdf":
+                self.gerar_pdf(codigos, destino)
+            elif formato == "zip":
+                self.gerar_zip(codigos, destino)
+            else:
+                self.gerar_imagens(codigos, formato, destino)
+        except Exception as exc:
+            self.fila.put({"tipo": "erro", "msg": str(exc), "detalhe": traceback.format_exc(limit=3)})
 
     def gerar_a_partir_da_tabela(self):
+        if self._geracao_em_andamento or self._carregamento_em_andamento:
+            return
         if self.df is None or not self.column_combo.get():
             messagebox.showwarning("Aviso", "Selecione um arquivo e uma coluna.")
             return
 
-        codigos = [str(v) for v in self.df[self.column_combo.get()].dropna().tolist()]
+        codigos = self._obter_valores_coluna(self.df, self.column_combo.get())
         if not codigos:
             messagebox.showwarning("Aviso", "A coluna selecionada não possui dados válidos.")
             return
 
+        try:
+            codigos, invalidos = self._validar_parametros_geracao(codigos)
+        except ValueError as exc:
+            messagebox.showwarning("Validação", str(exc))
+            return
+
+        if invalidos:
+            messagebox.showwarning(
+                "Validação",
+                f"{invalidos} registro(s) foram ignorados por não atenderem aos limites de entrada.",
+            )
+
         formato = self.formato_saida.get()
+        destino = None
         if formato == "pdf":
-            caminho = filedialog.asksaveasfilename(defaultextension=".pdf", filetypes=[("PDF", "*.pdf")])
-            if caminho:
-                self.gerar_pdf(codigos, caminho)
-                messagebox.showinfo("Sucesso", "PDF gerado com sucesso.")
+            destino = filedialog.asksaveasfilename(defaultextension=".pdf", filetypes=[("PDF", "*.pdf")])
         elif formato == "zip":
-            caminho = filedialog.asksaveasfilename(defaultextension=".zip", filetypes=[("ZIP", "*.zip")])
-            if caminho:
-                self.gerar_zip(codigos, caminho)
-                messagebox.showinfo("Sucesso", "ZIP gerado com sucesso.")
+            destino = filedialog.asksaveasfilename(defaultextension=".zip", filetypes=[("ZIP", "*.zip")])
         else:
-            pasta = filedialog.askdirectory()
-            if pasta:
-                self.gerar_imagens(codigos, formato, pasta)
-                messagebox.showinfo("Sucesso", f"Arquivos gerados em: {pasta}")
+            destino = filedialog.askdirectory()
+
+        if not destino:
+            return
+
+        self._iniciar_progresso(len(codigos))
+        worker = threading.Thread(target=self._executar_geracao, args=(codigos, formato, destino), daemon=True)
+        worker.start()
 
 
 if __name__ == "__main__":
