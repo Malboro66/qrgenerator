@@ -1,4 +1,5 @@
 import io
+import logging
 import os
 import queue
 import tempfile
@@ -19,6 +20,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from models.geracao_config import GeracaoConfig
 from services.codigo_service import CodigoService
+from logging_utils import setup_logging
 
 @dataclass
 class ItemCodigo:
@@ -36,6 +38,7 @@ class QRCodeGenerator:
         self.root.geometry("980x680")
 
         self.fila = queue.Queue()
+        self.logger = setup_logging()
         self.service = CodigoService()
         self.df = None
         self.arquivo_fonte = ""
@@ -170,14 +173,17 @@ class QRCodeGenerator:
         self.select_button.configure(state="disabled")
         self.generate_button.configure(state="disabled")
 
+        self.logger.info("Iniciando carregamento de arquivo", extra={"event": "load_start", "operation": "load", "path": caminho})
         worker = threading.Thread(target=self._executar_carregamento, args=(caminho,), daemon=True)
         worker.start()
 
     def _executar_carregamento(self, caminho):
         try:
             tabela = self._carregar_tabela(caminho)
+            self.logger.info("Carregamento concluído", extra={"event": "load_done", "operation": "load", "path": caminho})
             self.fila.put({"tipo": "carregamento_sucesso", "caminho": caminho, "tabela": tabela})
         except Exception as exc:
+            self.logger.exception("Falha no carregamento", extra={"event": "load_error", "operation": "load", "path": caminho, "erro": str(exc)})
             self.fila.put({"tipo": "carregamento_erro", "msg": str(exc)})
 
     def _formatar_excecao(self, exc: Exception, contexto: str) -> str:
@@ -268,6 +274,7 @@ class QRCodeGenerator:
                 self.fila.put({"tipo": "progresso", "atual": i, "total": total, "codigo": codigo})
 
             if emitir_sucesso:
+                self.logger.info("Geração de imagens concluída", extra={"event": "generate_done", "operation": "images", "path": destino, "total": total})
                 self.fila.put({"tipo": "sucesso", "caminho": destino})
         except (OSError, ValueError) as exc:
             raise RuntimeError(self._formatar_excecao(exc, "Erro ao gerar imagens")) from exc
@@ -280,6 +287,7 @@ class QRCodeGenerator:
                     for nome in os.listdir(tmpdir):
                         if nome.lower().endswith('.png'):
                             zf.write(os.path.join(tmpdir, nome), arcname=nome)
+            self.logger.info("ZIP gerado com sucesso", extra={"event": "generate_done", "operation": "zip", "path": caminho_zip})
             self.fila.put({"tipo": "sucesso", "caminho": caminho_zip})
         except (OSError, zipfile.BadZipFile, RuntimeError) as exc:
             raise RuntimeError(self._formatar_excecao(exc, "Erro ao gerar ZIP")) from exc
@@ -317,6 +325,7 @@ class QRCodeGenerator:
                     y = altura_pagina - 40 * mm
 
             pdf.save()
+            self.logger.info("PDF gerado com sucesso", extra={"event": "generate_done", "operation": "pdf", "path": caminho_pdf, "total": total})
             self.fila.put({"tipo": "sucesso", "caminho": caminho_pdf})
         except (OSError, ValueError, RuntimeError) as exc:
             raise RuntimeError(self._formatar_excecao(exc, "Erro ao gerar PDF")) from exc
@@ -396,6 +405,7 @@ class QRCodeGenerator:
             else:
                 self.gerar_imagens(codigos, formato, destino)
         except Exception as exc:
+            self.logger.exception("Falha na geração", extra={"event": "generate_error", "operation": formato, "path": str(destino), "erro": str(exc)})
             self.fila.put({"tipo": "erro", "msg": str(exc), "detalhe": traceback.format_exc(limit=3)})
 
     def gerar_a_partir_da_tabela(self):
@@ -435,6 +445,7 @@ class QRCodeGenerator:
         if not destino:
             return
 
+        self.logger.info("Iniciando geração", extra={"event": "generate_start", "operation": formato, "path": str(destino), "total": len(codigos)})
         self._iniciar_progresso(len(codigos))
         worker = threading.Thread(target=self._executar_geracao, args=(codigos, formato, destino), daemon=True)
         worker.start()
