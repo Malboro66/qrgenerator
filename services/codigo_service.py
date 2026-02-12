@@ -3,12 +3,15 @@ import io
 
 import qrcode
 from PIL import Image
-from reportlab.graphics import renderPM
-from reportlab.graphics.barcode import createBarcodeDrawing
-from reportlab.graphics.utils import RenderPMError
-from reportlab.lib.units import mm
 
 from models.geracao_config import GeracaoConfig
+
+try:
+    from barcode import Code128 as PyCode128
+    from barcode.writer import ImageWriter
+except Exception:
+    PyCode128 = None
+    ImageWriter = None
 
 
 class CodigoService:
@@ -103,13 +106,43 @@ class CodigoService:
 
     @staticmethod
     def _gerar_barcode_pil(dado: str) -> Image.Image:
+        # Backend principal: python-barcode + Pillow (não depende de renderPM).
+        if PyCode128 and ImageWriter:
+            try:
+                buffer = io.BytesIO()
+                writer = ImageWriter()
+                codigo = PyCode128(dado, writer=writer)
+                codigo.write(
+                    buffer,
+                    options={
+                        "module_width": 0.25,
+                        "module_height": 18.0,
+                        "font_size": 10,
+                        "text_distance": 4,
+                        "quiet_zone": 2.0,
+                        "dpi": 200,
+                    },
+                )
+                buffer.seek(0)
+                return Image.open(buffer).convert('RGB')
+            except Exception as exc:
+                raise RuntimeError(
+                    "Falha ao gerar barcode com python-barcode. Verifique os dados de entrada."
+                ) from exc
+
+        # Fallback opcional: renderPM (mantido por compatibilidade com ambientes legados).
         try:
+            from reportlab.graphics import renderPM
+            from reportlab.graphics.barcode import createBarcodeDrawing
+            from reportlab.graphics.utils import RenderPMError
+            from reportlab.lib.units import mm
+
             desenho = createBarcodeDrawing('Code128', value=dado, barHeight=20 * mm, barWidth=0.45, humanReadable=True)
             return renderPM.drawToPIL(desenho, dpi=200).convert('RGB')
-        except (RenderPMError, ModuleNotFoundError) as exc:
+        except (ModuleNotFoundError, ImportError, RuntimeError, OSError) as exc:
             raise RuntimeError(
-                "Geração de código de barras indisponível: backend gráfico do ReportLab não encontrado. "
-                "Instale 'rlPyCairo' ou uma versão do ReportLab com '_rl_renderPM'."
+                "Geração de código de barras indisponível: instale a dependência opcional 'python-barcode' "
+                "(recomendado) ou habilite o backend renderPM do ReportLab."
             ) from exc
 
     @staticmethod

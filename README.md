@@ -36,10 +36,11 @@ To run this application, you will need Python 3.7 or higher and the following li
 - `reportlab`
 - `Pillow`
 - `openpyxl`
+- `python-barcode` *(optional, recommended for Code128 without renderPM backend)*
 
 You can install them using pip:
 ```bash
-pip install pandas qrcode reportlab pillow openpyxl
+pip install pandas qrcode reportlab pillow openpyxl python-barcode
 ```
 
 ## How to Use
