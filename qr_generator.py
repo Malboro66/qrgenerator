@@ -1,5 +1,4 @@
 import io
-import csv
 import os
 import queue
 import tempfile
@@ -7,11 +6,10 @@ import threading
 import traceback
 import zipfile
 from dataclasses import dataclass
+
 import qrcode
 from PIL import Image, ImageTk
 from qrcode.image.svg import SvgImage
-from reportlab.graphics import renderPM
-from reportlab.graphics.barcode import createBarcodeDrawing
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
@@ -19,130 +17,13 @@ from reportlab.pdfgen import canvas
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+from models.geracao_config import GeracaoConfig
+from services.codigo_service import CodigoService
+
 @dataclass
 class ItemCodigo:
     """Representa um item que será convertido em código visual."""
-
     valor: str
-
-
-@dataclass
-class GeracaoConfig:
-    qr_size: int
-    foreground: str
-    background: str
-    tipo_codigo: str
-    modo: str
-    prefixo: str
-    sufixo: str
-    max_codigos_por_lote: int = 5000
-    max_tamanho_dado: int = 512
-
-
-class CodigoService:
-    """Camada de negócio para carga, validação e geração de códigos."""
-
-    @staticmethod
-    def formatar_excecao(exc: Exception, contexto: str) -> str:
-        return f"{contexto}: {exc}"
-
-    @staticmethod
-    def carregar_tabela(caminho):
-        if caminho.lower().endswith('.csv'):
-            try:
-                import pandas as pd
-                return pd.read_csv(caminho)
-            except ImportError:
-                with open(caminho, newline='', encoding='utf-8-sig') as f:
-                    return list(csv.DictReader(f))
-            except (OSError, UnicodeDecodeError, ValueError) as exc:
-                raise RuntimeError(CodigoService.formatar_excecao(exc, 'Falha ao carregar CSV')) from exc
-
-        try:
-            import pandas as pd
-            return pd.read_excel(caminho)
-        except ImportError as exc:
-            raise RuntimeError(
-                "Falha ao carregar Excel. Instale/repare 'pandas', 'numpy' e 'openpyxl' no ambiente."
-            ) from exc
-        except (OSError, ValueError) as exc:
-            raise RuntimeError(CodigoService.formatar_excecao(exc, 'Falha ao carregar Excel')) from exc
-
-    @staticmethod
-    def obter_colunas(tabela):
-        if tabela is None:
-            return []
-        if hasattr(tabela, 'columns'):
-            return list(tabela.columns)
-        if isinstance(tabela, list) and tabela:
-            return list(tabela[0].keys())
-        return []
-
-    @staticmethod
-    def obter_valores_coluna(tabela, coluna):
-        if hasattr(tabela, '__getitem__') and hasattr(tabela, 'columns'):
-            return [str(v) for v in tabela[coluna].dropna().tolist()]
-        if isinstance(tabela, list):
-            vals=[]
-            for linha in tabela:
-                valor=linha.get(coluna)
-                if valor is not None and str(valor).strip() != '':
-                    vals.append(str(valor))
-            return vals
-        return []
-
-    @staticmethod
-    def sanitizar_nome_arquivo(nome: str, fallback: str) -> str:
-        nome_limpo = ''.join('_' if c in '\\/:*?"<>|' else c for c in str(nome))
-        nome_limpo = nome_limpo.strip().strip('.')
-        return nome_limpo or fallback
-
-    @staticmethod
-    def normalizar_dado(valor: str, cfg: GeracaoConfig) -> str:
-        valor = str(valor)
-        if cfg.modo == 'numerico':
-            return f"{cfg.prefixo}{valor}{cfg.sufixo}"
-        return valor
-
-    @staticmethod
-    def validar_parametros_geracao(codigos, cfg: GeracaoConfig):
-        if not isinstance(codigos, list) or not codigos:
-            raise ValueError('Nenhum código válido foi encontrado para geração.')
-        if len(codigos) > cfg.max_codigos_por_lote:
-            raise ValueError(f'Limite excedido: máximo de {cfg.max_codigos_por_lote} códigos por geração.')
-        if cfg.qr_size < 80 or cfg.qr_size > 1200:
-            raise ValueError('Tamanho inválido. Use um valor entre 80 e 1200 pixels.')
-
-        validos=[]
-        invalidos=0
-        for bruto in codigos:
-            dado = CodigoService.normalizar_dado(bruto, cfg)
-            if not dado or not dado.strip() or len(dado) > cfg.max_tamanho_dado:
-                invalidos += 1
-                continue
-            if cfg.tipo_codigo == 'barcode' and any(ord(ch) < 32 for ch in dado):
-                invalidos += 1
-                continue
-            validos.append(str(bruto))
-
-        if not validos:
-            raise ValueError('Todos os dados foram rejeitados pela validação de entrada.')
-        return validos, invalidos
-
-    @staticmethod
-    def gerar_imagem_obj(dado: str, cfg: GeracaoConfig) -> Image.Image:
-        if cfg.tipo_codigo == 'barcode':
-            desenho = createBarcodeDrawing('Code128', value=dado, barHeight=20 * mm, barWidth=0.45, humanReadable=True)
-            return renderPM.drawToPIL(desenho, dpi=200).convert('RGB')
-        qr = qrcode.QRCode(box_size=10, border=2)
-        qr.add_data(dado)
-        qr.make(fit=True)
-        img = qr.make_image(fill_color=cfg.foreground, back_color=cfg.background)
-        if hasattr(img, 'get_image'):
-            img = img.get_image()
-        if not isinstance(img, Image.Image):
-            img = Image.open(io.BytesIO(img.tobytes()))
-        return img.convert('RGB')
 
 
 class QRCodeGenerator:
@@ -158,6 +39,7 @@ class QRCodeGenerator:
         self.df = None
         self.arquivo_fonte = ""
         self.preview_image_ref = None
+        self._preview_backend_error_shown = False
 
         self.qr_size = tk.IntVar(value=250)
         self.qr_foreground_color = tk.StringVar(value="black")
@@ -323,33 +205,46 @@ class QRCodeGenerator:
             max_tamanho_dado=self.max_tamanho_dado,
         )
 
-    def _validar_parametros_geracao(self, codigos):
-        return self.service.validar_parametros_geracao(codigos, self._build_config())
+    def _validar_parametros_geracao(self, codigos, cfg: GeracaoConfig | None = None):
+        cfg = cfg or self._build_config()
+        return self.service.validar_parametros_geracao(codigos, cfg)
 
     def _sanitizar_nome_arquivo(self, nome: str, fallback: str) -> str:
         return self.service.sanitizar_nome_arquivo(nome, fallback)
 
-    def _normalizar_dado(self, valor: str) -> str:
-        return self.service.normalizar_dado(valor, self._build_config())
+    def _normalizar_dado(self, valor: str, cfg: GeracaoConfig | None = None) -> str:
+        cfg = cfg or self._build_config()
+        return self.service.normalizar_dado(valor, cfg)
 
-    def _gerar_imagem_obj(self, dado: str) -> Image.Image:
-        return self.service.gerar_imagem_obj(dado, self._build_config())
+    def _gerar_imagem_obj(self, dado: str, cfg: GeracaoConfig | None = None) -> Image.Image:
+        cfg = cfg or self._build_config()
+        return self.service.gerar_imagem_obj(dado, cfg)
 
     def atualizar_preview(self):
-        amostra = self._normalizar_dado("123456789")
-        img = self._gerar_imagem_obj(amostra)
-        img.thumbnail((260, 260))
-        self.preview_image_ref = ImageTk.PhotoImage(img)
-        self.preview_label.configure(image=self.preview_image_ref)
+        cfg = self._build_config()
+        amostra = self._normalizar_dado("123456789", cfg)
+        try:
+            img = self._gerar_imagem_obj(amostra, cfg)
+            img.thumbnail((260, 260))
+            self.preview_image_ref = ImageTk.PhotoImage(img)
+            self.preview_label.configure(image=self.preview_image_ref, text="")
+            self._preview_backend_error_shown = False
+        except RuntimeError as exc:
+            # Evita quebrar callback do Tkinter quando backend opcional do reportlab não está disponível.
+            self.preview_label.configure(image="", text="Preview indisponível para barcode neste ambiente")
+            if not self._preview_backend_error_shown:
+                messagebox.showwarning("Dependência opcional ausente", str(exc))
+                self._preview_backend_error_shown = True
 
     def gerar_imagens(self, codigos, formato, destino, emitir_sucesso=True):
         try:
+            cfg = self._build_config()
             os.makedirs(destino, exist_ok=True)
             total = len(codigos)
 
             nomes_usados = set()
             for i, codigo in enumerate(codigos, start=1):
-                dado = self._normalizar_dado(codigo)
+                dado = self._normalizar_dado(codigo, cfg)
                 nome_base = self._sanitizar_nome_arquivo(codigo, f"codigo_{i}")
                 nome_arquivo = nome_base
                 sufixo = 2
@@ -359,14 +254,14 @@ class QRCodeGenerator:
                 nomes_usados.add(nome_arquivo)
 
                 if formato == "svg":
-                    if self.tipo_codigo.get() == "barcode":
+                    if cfg.tipo_codigo == "barcode":
                         raise ValueError("Exportação SVG para código de barras não suportada nesta versão.")
                     qr = qrcode.make(dado, image_factory=SvgImage)
                     caminho_saida = os.path.join(destino, f"{nome_arquivo}.svg")
                     with open(caminho_saida, "wb") as f:
                         qr.save(f)
                 else:
-                    imagem = self._gerar_imagem_obj(dado)
+                    imagem = self._gerar_imagem_obj(dado, cfg)
                     imagem.save(os.path.join(destino, f"{nome_arquivo}.png"), format="PNG")
 
                 self.fila.put({"tipo": "progresso", "atual": i, "total": total, "codigo": codigo})
@@ -390,6 +285,7 @@ class QRCodeGenerator:
 
     def gerar_pdf(self, codigos, caminho_pdf):
         try:
+            cfg = self._build_config()
             pdf = canvas.Canvas(caminho_pdf, pagesize=A4)
             largura_pagina, altura_pagina = A4
 
@@ -400,7 +296,7 @@ class QRCodeGenerator:
             total = len(codigos)
 
             for i, codigo in enumerate(codigos, start=1):
-                imagem = self._gerar_imagem_obj(self._normalizar_dado(codigo))
+                imagem = self._gerar_imagem_obj(self._normalizar_dado(codigo, cfg), cfg)
                 buffer = io.BytesIO()
                 imagem.save(buffer, format="PNG")
                 buffer.seek(0)
@@ -514,7 +410,8 @@ class QRCodeGenerator:
             return
 
         try:
-            codigos, invalidos = self._validar_parametros_geracao(codigos)
+            cfg = self._build_config()
+            codigos, invalidos = self._validar_parametros_geracao(codigos, cfg)
         except ValueError as exc:
             messagebox.showwarning("Validação", str(exc))
             return
@@ -546,3 +443,4 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = QRCodeGenerator(root)
     root.mainloop()
+
