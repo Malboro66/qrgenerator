@@ -1,280 +1,438 @@
+import io
+import os
+import queue
+import tempfile
+import threading
+import traceback
+import zipfile
+from dataclasses import dataclass
+
+from PIL import ImageTk
+from qrcode.image.svg import SvgImage
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import mm
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfgen import canvas
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
-from PIL import Image, ImageTk
-import os
-import threading
-import queue
 
-class BuscadorService:
-    """Responsável pela lógica de busca e carregamento de arquivos (Background)."""
-    def __init__(self, fila_resultados):
-        self.fila = fila_resultados
+from models.geracao_config import GeracaoConfig
+from services.codigo_service import CodigoService
 
-    def buscar_e_carregar(self, diretorio_raiz, termo_busca):
-        """Procura a pasta e carrega as imagens em background."""
-        # 1. Busca
-        caminho_pasta = None
-        termo_lower = termo_busca.lower().strip()
-        
-        if not os.path.exists(diretorio_raiz):
-            self.fila.put({"status": "error", "msg": "Diretório raiz não encontrado."})
-            return
+@dataclass
+class ItemCodigo:
+    """Representa um item que será convertido em código visual."""
 
-        # Busca exata (pode-se adicionar lógica de busca parcial aqui)
-        try:
-            for pasta in os.listdir(diretorio_raiz):
-                caminho_completo = os.path.join(diretorio_raiz, pasta)
-                if os.path.isdir(caminho_completo) and pasta.lower() == termo_lower:
-                    caminho_pasta = caminho_completo
-                    nome_peca = pasta
-                    break
-        except Exception as e:
-            self.fila.put({"status": "error", "msg": str(e)})
-            return
+    valor: str
 
-        if not caminho_pasta:
-            self.fila.put({"status": "not_found"})
-            return
 
-        # 2. Carregamento de Imagens
-        try:
-            arquivos = os.listdir(caminho_pasta)
-            extensoes = ('.jpg', '.jpeg', '.png', '.bmp', '.gif')
-            imagens = [f for f in arquivos if f.lower().endswith(extensoes)]
-            
-            total = len(imagens)
-            if total == 0:
-                self.fila.put({"status": "no_images"})
-                return
+class QRCodeGenerator:
+    """Aplicativo desktop para geração de QR Codes e códigos de barras."""
 
-            self.fila.put({"status": "start", "total": total, "nome": nome_peca})
-
-            for i, arquivo in enumerate(imagens):
-                caminho_img = os.path.join(caminho_pasta, arquivo)
-                
-                # Carrega e redimensiona
-                try:
-                    img = Image.open(caminho_img)
-                    img.thumbnail((250, 250)) # Tamanho um pouco maior para melhor visualização
-                    
-                    # Converte para PhotoImage
-                    photo = ImageTk.PhotoImage(img)
-                    
-                    # Envia para a UI thread
-                    self.fila.put({
-                        "status": "progress",
-                        "data": (arquivo, photo),
-                        "current": i,
-                        "total": total
-                    })
-                except Exception as e:
-                    print(f"Erro ao carregar {arquivo}: {e}")
-            
-            self.fila.put({"status": "done"})
-
-        except Exception as e:
-            self.fila.put({"status": "error", "msg": str(e)})
-
-class VisualizadorPecas:
-    def __init__(self, root):
+    def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("Buscador de Peças Pro - Inventory Photo Manager")
-        self.root.geometry("1100x800")
-        self.root.minsize(800, 600)
-        
-        # Configuração de Estilo (Tema)
-        self.style = ttk.Style()
-        self.style.theme_use('clam')
-        self.style.configure("TButton", font=("Arial", 10))
-        self.style.configure("TLabel", font=("Arial", 10))
-        self.style.configure("Header.TLabel", font=("Arial", 12, "bold"))
+        self.root.title("QR / Código de Barras Generator")
+        self.root.geometry("980x680")
 
-        # Variáveis de Controle
-        self.diretorio_raiz = tk.StringVar()
-        self.pesquisa_var = tk.StringVar()
-        self.imagens_ativas = [] # Evita garbage collection
-        self.worker_thread = None
         self.fila = queue.Queue()
-        self.grid_row = 0
-        self.grid_col = 0
-        self.max_cols = 3 # Número de imagens por linha
+        self.service = CodigoService()
+        self.df = None
+        self.arquivo_fonte = ""
+        self.preview_image_ref = None
+        self._preview_backend_error_shown = False
 
-        # Interface
-        self.criar_interface()
-        
-        # Inicia o loop de verificação da fila
-        self.verificar_fila()
+        self.qr_size = tk.IntVar(value=250)
+        self.qr_foreground_color = tk.StringVar(value="black")
+        self.qr_background_color = tk.StringVar(value="white")
+        self.modo = tk.StringVar(value="texto")
+        self.formato_saida = tk.StringVar(value="pdf")
+        self.tipo_codigo = tk.StringVar(value="qrcode")
 
-    def criar_interface(self):
-        # --- Topo: Controles ---
-        controle_frame = ttk.Frame(self.root, padding=10)
-        controle_frame.pack(fill="x")
+        self.prefixo_numerico = tk.StringVar(value="")
+        self.sufixo_numerico = tk.StringVar(value="")
+        self.max_codigos_por_lote = 5000
+        self.max_tamanho_dado = 512
 
-        # Linha 1: Pasta e Busca
-        linha1 = ttk.Frame(controle_frame)
-        linha1.pack(fill="x", pady=5)
+        self._criar_interface()
+        self.atualizar_preview()
+        self._geracao_em_andamento = False
+        self._carregamento_em_andamento = False
+        self.root.after(100, self.verificar_fila)
 
-        ttk.Button(linha1, text="📂 Selecionar Pasta Raiz", command=self.selecionar_pasta).pack(side="left", padx=5)
-        
-        ttk.Label(linha1, text="Código da Peça:").pack(side="left", padx=(20, 5))
-        entrada = ttk.Entry(linha1, textvariable=self.pesquisa_var, width=20, font=("Arial", 10))
-        entrada.pack(side="left", padx=5)
-        entrada.bind("<Return>", lambda e: self.iniciar_busca())
-        
-        ttk.Button(linha1, text="🔍 Buscar", command=self.iniciar_busca).pack(side="left", padx=5)
+    def _criar_interface(self):
+        topo = ttk.Frame(self.root, padding=10)
+        topo.pack(fill="x")
 
-        # Barra de Progresso (Invisível inicialmente)
-        self.progress_frame = ttk.Frame(controle_frame)
-        self.progress_frame.pack(fill="x", pady=5)
-        
-        self.progress_bar = ttk.Progressbar(self.progress_frame, mode="indeterminate")
-        self.lbl_progresso = ttk.Label(self.progress_frame, text="")
+        self.select_button = ttk.Button(topo, text="Selecionar Arquivo", command=self.selecionar_arquivo)
+        self.select_button.grid(row=0, column=0, padx=5, pady=5, sticky="w")
 
-        # --- Meio: Área de Scroll ---
-        container_scroll = ttk.Frame(self.root)
-        container_scroll.pack(fill="both", expand=True, padx=10, pady=5)
+        self.column_combo = ttk.Combobox(topo, state="disabled", width=35)
+        self.column_combo.grid(row=0, column=1, padx=5, pady=5, sticky="w")
 
-        self.canvas = tk.Canvas(container_scroll, bg="white")
-        self.scrollbar = ttk.Scrollbar(container_scroll, orient="vertical", command=self.canvas.yview)
-        
-        self.scrollable_frame = ttk.Frame(self.canvas, bg="white")
-        
-        self.scrollable_frame.bind(
-            "<Configure>",
-            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        self.generate_button = ttk.Button(
+            topo,
+            text="Gerar",
+            state="disabled",
+            command=self.gerar_a_partir_da_tabela,
         )
+        self.generate_button.grid(row=0, column=2, padx=5, pady=5)
 
-        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
-        self.canvas.configure(yscrollcommand=self.scrollbar.set)
+        ttk.Label(topo, text="Tipo:").grid(row=1, column=0, sticky="w", padx=5)
+        ttk.Radiobutton(
+            topo,
+            text="QR Code",
+            variable=self.tipo_codigo,
+            value="qrcode",
+            command=self.atualizar_preview,
+        ).grid(row=1, column=1, sticky="w")
+        ttk.Radiobutton(
+            topo,
+            text="Código de Barras (Code128)",
+            variable=self.tipo_codigo,
+            value="barcode",
+            command=self.atualizar_preview,
+        ).grid(row=1, column=2, sticky="w")
 
-        self.canvas.pack(side="left", fill="both", expand=True)
-        self.scrollbar.pack(side="right", fill="y")
+        ttk.Label(topo, text="Modo de dados:").grid(row=2, column=0, sticky="w", padx=5)
+        ttk.Radiobutton(
+            topo,
+            text="Texto",
+            variable=self.modo,
+            value="texto",
+            command=self.atualizar_controles_formato,
+        ).grid(row=2, column=1, sticky="w")
+        ttk.Radiobutton(
+            topo,
+            text="Numérico",
+            variable=self.modo,
+            value="numerico",
+            command=self.atualizar_controles_formato,
+        ).grid(row=2, column=2, sticky="w")
 
-        # --- Rodapé: Status ---
-        self.status_var = tk.StringVar(value="Aguardando seleção de pasta...")
-        status_bar = ttk.Label(self.root, textvariable=self.status_var, relief="sunken", anchor="w")
-        status_bar.pack(side="bottom", fill="x")
+        self.texto_controls = ttk.Frame(topo)
+        self.texto_controls.grid(row=3, column=0, columnspan=3, sticky="w", padx=5, pady=3)
+        ttk.Label(self.texto_controls, text="Dados conforme coluna selecionada.").pack(anchor="w")
 
-    def selecionar_pasta(self):
-        pasta = filedialog.askdirectory(title="Selecione a pasta onde estão as pastas das peças")
-        if pasta:
-            self.diretorio_raiz.set(pasta)
-            self.status_var.set(f"Pasta selecionada: {pasta}")
-            messagebox.showinfo("Pasta Selecionada", "Pasta raiz definida com sucesso.\nAgora digite o código da peça para buscar.")
-
-    def iniciar_busca(self):
-        termo = self.pesquisa_var.get().strip()
-        if not termo:
-            messagebox.showwarning("Aviso", "Digite um código para buscar.")
-            return
-        
-        if not self.diretorio_raiz.get():
-            messagebox.showwarning("Aviso", "Selecione a pasta raiz primeiro.")
-            return
-
-        # Limpa a UI anterior
-        self.limpar_visualizacao()
-        
-        # Inicia Thread
-        self.worker_thread = threading.Thread(
-            target=self._worker_target, 
-            args=(termo,), 
-            daemon=True
+        self.numerico_controls = ttk.Frame(topo)
+        ttk.Label(self.numerico_controls, text="Prefixo:").pack(side="left", padx=(0, 5))
+        ttk.Entry(self.numerico_controls, textvariable=self.prefixo_numerico, width=10).pack(
+            side="left", padx=(0, 10)
         )
-        self.worker_thread.start()
+        ttk.Label(self.numerico_controls, text="Sufixo:").pack(side="left", padx=(0, 5))
+        ttk.Entry(self.numerico_controls, textvariable=self.sufixo_numerico, width=10).pack(side="left")
 
-        # Atualiza UI para estado de carregamento
-        self.progress_bar.pack(side="left", fill="x", expand=True, padx=5)
+        self.atualizar_controles_formato()
+
+        preview_frame = ttk.LabelFrame(self.root, text="Preview", padding=10)
+        preview_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+        self.preview_label = ttk.Label(preview_frame)
+        self.preview_label.pack(expand=True)
+
+        self.progress_frame = ttk.Frame(self.root, padding=(10, 0, 10, 10))
+        self.progress_frame.pack(fill="x")
+
+        self.progress_label_var = tk.StringVar(value="")
+        self.progress_label = ttk.Label(self.progress_frame, textvariable=self.progress_label_var)
+        self.progress_label.pack(anchor="w")
+
+        self.progress_bar = ttk.Progressbar(self.progress_frame, mode="determinate", maximum=100)
+        self.progress_bar.pack(fill="x", pady=(4, 0))
+        self.progress_frame.pack_forget()
+
+    def atualizar_controles_formato(self):
+        if self.modo.get() == "texto":
+            self.numerico_controls.grid_forget()
+            self.texto_controls.grid(row=3, column=0, columnspan=3, sticky="w", padx=5, pady=3)
+        else:
+            self.texto_controls.grid_forget()
+            self.numerico_controls.grid(row=3, column=0, columnspan=3, sticky="w", padx=5, pady=3)
+
+    def selecionar_arquivo(self):
+        if self._carregamento_em_andamento or self._geracao_em_andamento:
+            return
+
+        caminho = filedialog.askopenfilename(
+            title="Selecione CSV ou Excel",
+            filetypes=[("Arquivos de dados", "*.csv *.xlsx")],
+        )
+        if not caminho:
+            return
+
+        self._carregamento_em_andamento = True
+        self.progress_bar.stop()
+        self.progress_bar.configure(mode="indeterminate")
+        self.progress_bar["value"] = 0
         self.progress_bar.start(10)
-        self.lbl_progresso.pack(side="left", padx=5)
-        self.lbl_progresso.config(text=f"Buscando por '{termo}'...")
-        self.status_var.set("Carregando imagens... (Interface responsiva)")
+        self.progress_label_var.set("Carregando arquivo, aguarde...")
+        self.progress_frame.pack(fill="x")
+        self.select_button.configure(state="disabled")
+        self.generate_button.configure(state="disabled")
 
-    def _worker_target(self, termo):
-        """Função executada na thread separada."""
-        service = BuscadorService(self.fila)
-        service.buscar_e_carregar(self.diretorio_raiz.get(), termo)
+        worker = threading.Thread(target=self._executar_carregamento, args=(caminho,), daemon=True)
+        worker.start()
 
-    def limpar_visualizacao(self):
-        """Destroi todos os widgets do grid e limpa memória."""
-        for widget in self.scrollable_frame.winfo_children():
-            widget.destroy()
-        self.imagens_ativas.clear()
-        self.grid_row = 0
-        self.grid_col = 0
+    def _executar_carregamento(self, caminho):
+        try:
+            tabela = self._carregar_tabela(caminho)
+            self.fila.put({"tipo": "carregamento_sucesso", "caminho": caminho, "tabela": tabela})
+        except Exception as exc:
+            self.fila.put({"tipo": "carregamento_erro", "msg": str(exc)})
+
+    def _formatar_excecao(self, exc: Exception, contexto: str) -> str:
+        return self.service.formatar_excecao(exc, contexto)
+
+    def _carregar_tabela(self, caminho):
+        """Carrega CSV/XLSX com fallback quando pandas/numpy não estiverem disponíveis."""
+        return self.service.carregar_tabela(caminho)
+
+    def _obter_colunas(self, tabela):
+        return self.service.obter_colunas(tabela)
+
+    def _obter_valores_coluna(self, tabela, coluna):
+        return self.service.obter_valores_coluna(tabela, coluna)
+
+    def _build_config(self) -> GeracaoConfig:
+        return GeracaoConfig(
+            qr_size=int(self.qr_size.get()),
+            foreground=self.qr_foreground_color.get(),
+            background=self.qr_background_color.get(),
+            tipo_codigo=self.tipo_codigo.get(),
+            modo=self.modo.get(),
+            prefixo=self.prefixo_numerico.get(),
+            sufixo=self.sufixo_numerico.get(),
+            max_codigos_por_lote=self.max_codigos_por_lote,
+            max_tamanho_dado=self.max_tamanho_dado,
+        )
+
+    def _validar_parametros_geracao(self, codigos):
+        return self.service.validar_parametros_geracao(codigos, self._build_config())
+
+    def _sanitizar_nome_arquivo(self, nome: str, fallback: str) -> str:
+        return self.service.sanitizar_nome_arquivo(nome, fallback)
+
+    def _normalizar_dado(self, valor: str) -> str:
+        return self.service.normalizar_dado(valor, self._build_config())
+
+    def _gerar_imagem_obj(self, dado: str) -> Image.Image:
+        return self.service.gerar_imagem_obj(dado, self._build_config())
+
+    def atualizar_preview(self):
+        amostra = self._normalizar_dado("123456789")
+        try:
+            img = self._gerar_imagem_obj(amostra)
+            img.thumbnail((260, 260))
+            self.preview_image_ref = ImageTk.PhotoImage(img)
+            self.preview_label.configure(image=self.preview_image_ref, text="")
+            self._preview_backend_error_shown = False
+        except RuntimeError as exc:
+            # Evita quebrar callback do Tkinter quando backend opcional do reportlab não está disponível.
+            self.preview_label.configure(image="", text="Preview indisponível para barcode neste ambiente")
+            if not self._preview_backend_error_shown:
+                messagebox.showwarning("Dependência opcional ausente", str(exc))
+                self._preview_backend_error_shown = True
+
+    def gerar_imagens(self, codigos, formato, destino, emitir_sucesso=True):
+        try:
+            os.makedirs(destino, exist_ok=True)
+            total = len(codigos)
+
+            nomes_usados = set()
+            for i, codigo in enumerate(codigos, start=1):
+                dado = self._normalizar_dado(codigo)
+                nome_base = self._sanitizar_nome_arquivo(codigo, f"codigo_{i}")
+                nome_arquivo = nome_base
+                sufixo = 2
+                while nome_arquivo in nomes_usados:
+                    nome_arquivo = f"{nome_base}_{sufixo}"
+                    sufixo += 1
+                nomes_usados.add(nome_arquivo)
+
+                if formato == "svg":
+                    if self.tipo_codigo.get() == "barcode":
+                        raise ValueError("Exportação SVG para código de barras não suportada nesta versão.")
+                    qr = qrcode.make(dado, image_factory=SvgImage)
+                    caminho_saida = os.path.join(destino, f"{nome_arquivo}.svg")
+                    with open(caminho_saida, "wb") as f:
+                        qr.save(f)
+                else:
+                    imagem = self._gerar_imagem_obj(dado)
+                    imagem.save(os.path.join(destino, f"{nome_arquivo}.png"), format="PNG")
+
+                self.fila.put({"tipo": "progresso", "atual": i, "total": total, "codigo": codigo})
+
+            if emitir_sucesso:
+                self.fila.put({"tipo": "sucesso", "caminho": destino})
+        except (OSError, ValueError) as exc:
+            raise RuntimeError(self._formatar_excecao(exc, "Erro ao gerar imagens")) from exc
+
+    def gerar_zip(self, codigos, caminho_zip):
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                self.gerar_imagens(codigos, "png", tmpdir, emitir_sucesso=False)
+                with zipfile.ZipFile(caminho_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+                    for nome in os.listdir(tmpdir):
+                        if nome.lower().endswith('.png'):
+                            zf.write(os.path.join(tmpdir, nome), arcname=nome)
+            self.fila.put({"tipo": "sucesso", "caminho": caminho_zip})
+        except (OSError, zipfile.BadZipFile, RuntimeError) as exc:
+            raise RuntimeError(self._formatar_excecao(exc, "Erro ao gerar ZIP")) from exc
+
+    def gerar_pdf(self, codigos, caminho_pdf):
+        try:
+            pdf = canvas.Canvas(caminho_pdf, pagesize=A4)
+            largura_pagina, altura_pagina = A4
+
+            x = 20 * mm
+            y = altura_pagina - 40 * mm
+            tamanho = 35 * mm
+            margem = 10 * mm
+            total = len(codigos)
+
+            for i, codigo in enumerate(codigos, start=1):
+                imagem = self._gerar_imagem_obj(self._normalizar_dado(codigo))
+                buffer = io.BytesIO()
+                imagem.save(buffer, format="PNG")
+                buffer.seek(0)
+                image_reader = ImageReader(buffer)
+
+                pdf.drawImage(image_reader, x, y, width=tamanho, height=tamanho, preserveAspectRatio=True)
+                self.fila.put({"tipo": "progresso", "atual": i, "total": total, "codigo": codigo})
+
+                x += tamanho + margem
+                if x + tamanho > largura_pagina - 20 * mm:
+                    x = 20 * mm
+                    y -= tamanho + margem
+
+                if y < 20 * mm:
+                    pdf.showPage()
+                    x = 20 * mm
+                    y = altura_pagina - 40 * mm
+
+            pdf.save()
+            self.fila.put({"tipo": "sucesso", "caminho": caminho_pdf})
+        except (OSError, ValueError, RuntimeError) as exc:
+            raise RuntimeError(self._formatar_excecao(exc, "Erro ao gerar PDF")) from exc
+
+    def _iniciar_progresso(self, total):
+        self._geracao_em_andamento = True
+        self.progress_bar.stop()
+        self.progress_bar.configure(mode="determinate", maximum=max(total, 1))
+        self.progress_bar["value"] = 0
+        self.progress_label_var.set(f"Gerando 0/{total}...")
+        self.progress_frame.pack(fill="x")
+        self.generate_button.configure(state="disabled")
+        self.select_button.configure(state="disabled")
+
+    def _finalizar_progresso(self):
+        self._geracao_em_andamento = False
+        self._carregamento_em_andamento = False
+        self.progress_bar.stop()
+        self.progress_frame.pack_forget()
+        self.select_button.configure(state="normal")
+        if self.df is not None and self.column_combo.get():
+            self.generate_button.configure(state="normal")
 
     def verificar_fila(self):
-        """Verifica mensagens da thread de background e atualiza a UI na thread principal."""
         try:
-            msg = self.fila.get_nowait()
-            
-            if msg["status"] == "start":
-                # Exibe título
-                ttk.Label(
-                    self.scrollable_frame, 
-                    text=f"Resultados para: {msg['nome']}", 
-                    style="Header.TLabel",
-                    background="white"
-                ).pack(pady=10)
-                self.progress_bar.config(mode="determinate", maximum=msg["total"])
-                self.progress_bar['value'] = 0
-
-            elif msg["status"] == "progress":
-                # Adiciona imagem ao grid
-                nome_arquivo, photo = msg["data"]
-                self.adicionar_imagem_grid(nome_arquivo, photo)
-                self.imagens_ativas.append(photo)
-                
-                # Atualiza barra
-                self.progress_bar['value'] = msg["current"] + 1
-                self.lbl_progresso.config(text=f"Carregando: {msg['current']+1}/{msg['total']}")
-
-            elif msg["status"] == "done":
-                self.finalizar_carregamento("Imagens carregadas com sucesso!")
-            
-            elif msg["status"] == "not_found":
-                ttk.Label(self.scrollable_frame, text="Peça não encontrada.", font=("Arial", 14), foreground="red", background="white").pack(pady=20)
-                self.finalizar_carregamento("Peça não encontrada no índice.")
-            
-            elif msg["status"] == "no_images":
-                ttk.Label(self.scrollable_frame, text="Pasta encontrada, mas sem imagens.", background="white").pack(pady=20)
-                self.finalizar_carregamento("Pasta vazia.")
-
-            elif msg["status"] == "error":
-                messagebox.showerror("Erro", msg["msg"])
-                self.finalizar_carregamento("Erro ao processar.")
-
+            while True:
+                msg = self.fila.get_nowait()
+                if msg["tipo"] == "progresso":
+                    atual = msg.get("atual", 0)
+                    total = msg.get("total", 1)
+                    self.progress_bar.configure(maximum=max(total, 1))
+                    self.progress_bar["value"] = atual
+                    self.progress_label_var.set(f"Gerando {atual}/{total}: {msg.get('codigo', '')}")
+                elif msg["tipo"] == "sucesso":
+                    self._finalizar_progresso()
+                    messagebox.showinfo("Sucesso", f"Arquivo(s) gerado(s) em: {msg.get('caminho', '')}")
+                elif msg["tipo"] == "erro":
+                    self._finalizar_progresso()
+                    detalhe = msg.get("detalhe", "")
+                    erro_msg = msg.get("msg", "Falha durante a geração.")
+                    if detalhe:
+                        erro_msg = f"{erro_msg}\n\nDetalhes técnicos:\n{detalhe}"
+                    messagebox.showerror("Erro", erro_msg)
+                elif msg["tipo"] == "carregamento_sucesso":
+                    self.progress_bar.stop()
+                    self.progress_frame.pack_forget()
+                    self._carregamento_em_andamento = False
+                    self.select_button.configure(state="normal")
+                    self.df = msg["tabela"]
+                    self.arquivo_fonte = msg["caminho"]
+                    colunas = self._obter_colunas(self.df)
+                    self.column_combo.configure(values=colunas, state="readonly")
+                    if colunas:
+                        self.column_combo.set(colunas[0])
+                        self.generate_button.configure(state="normal")
+                    else:
+                        self.generate_button.configure(state="disabled")
+                elif msg["tipo"] == "carregamento_erro":
+                    self.progress_bar.stop()
+                    self.progress_frame.pack_forget()
+                    self._carregamento_em_andamento = False
+                    self.select_button.configure(state="normal")
+                    self.column_combo.configure(state="disabled", values=[])
+                    self.generate_button.configure(state="disabled")
+                    messagebox.showerror("Erro", f"Não foi possível abrir o arquivo: {msg.get('msg', '')}")
         except queue.Empty:
             pass
-        
-        self.root.after(50, self.verificar_fila)
 
-    def adicionar_imagem_grid(self, nome_arquivo, photo):
-        """Cria os widgets da imagem e os posiciona no grid."""
-        frame_item = ttk.Frame(self.scrollable_frame, borderwidth=2, relief="groove")
-        frame_item.grid(row=self.grid_row, column=self.grid_col, padx=10, pady=10)
+        self.root.after(100, self.verificar_fila)
 
-        # Imagem
-        lbl_img = ttk.Label(frame_item, image=photo)
-        lbl_img.pack()
+    def _executar_geracao(self, codigos, formato, destino):
+        try:
+            if formato == "pdf":
+                self.gerar_pdf(codigos, destino)
+            elif formato == "zip":
+                self.gerar_zip(codigos, destino)
+            else:
+                self.gerar_imagens(codigos, formato, destino)
+        except Exception as exc:
+            self.fila.put({"tipo": "erro", "msg": str(exc), "detalhe": traceback.format_exc(limit=3)})
 
-        # Nome do arquivo
-        lbl_texto = ttk.Label(frame_item, text=nome_arquivo, font=("Arial", 8), wraplength=200)
-        lbl_texto.pack(pady=5)
+    def gerar_a_partir_da_tabela(self):
+        if self._geracao_em_andamento or self._carregamento_em_andamento:
+            return
+        if self.df is None or not self.column_combo.get():
+            messagebox.showwarning("Aviso", "Selecione um arquivo e uma coluna.")
+            return
 
-        # Atualiza contadores do grid
-        self.grid_col += 1
-        if self.grid_col >= self.max_cols:
-            self.grid_col = 0
-            self.grid_row += 1
+        codigos = self._obter_valores_coluna(self.df, self.column_combo.get())
+        if not codigos:
+            messagebox.showwarning("Aviso", "A coluna selecionada não possui dados válidos.")
+            return
 
-    def finalizar_carregamento(self, mensagem_status):
-        self.progress_bar.stop()
-        self.progress_bar.pack_forget()
-        self.lbl_progresso.pack_forget()
-        self.status_var.set(mensagem_status)
+        try:
+            codigos, invalidos = self._validar_parametros_geracao(codigos)
+        except ValueError as exc:
+            messagebox.showwarning("Validação", str(exc))
+            return
+
+        if invalidos:
+            messagebox.showwarning(
+                "Validação",
+                f"{invalidos} registro(s) foram ignorados por não atenderem aos limites de entrada.",
+            )
+
+        formato = self.formato_saida.get()
+        destino = None
+        if formato == "pdf":
+            destino = filedialog.asksaveasfilename(defaultextension=".pdf", filetypes=[("PDF", "*.pdf")])
+        elif formato == "zip":
+            destino = filedialog.asksaveasfilename(defaultextension=".zip", filetypes=[("ZIP", "*.zip")])
+        else:
+            destino = filedialog.askdirectory()
+
+        if not destino:
+            return
+
+        self._iniciar_progresso(len(codigos))
+        worker = threading.Thread(target=self._executar_geracao, args=(codigos, formato, destino), daemon=True)
+        worker.start()
+
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = VisualizadorPecas(root)
+    app = QRCodeGenerator(root)
     root.mainloop()
