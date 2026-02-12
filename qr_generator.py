@@ -206,22 +206,26 @@ class QRCodeGenerator:
             max_tamanho_dado=self.max_tamanho_dado,
         )
 
-    def _validar_parametros_geracao(self, codigos):
-        return self.service.validar_parametros_geracao(codigos, self._build_config())
+    def _validar_parametros_geracao(self, codigos, cfg: GeracaoConfig | None = None):
+        cfg = cfg or self._build_config()
+        return self.service.validar_parametros_geracao(codigos, cfg)
 
     def _sanitizar_nome_arquivo(self, nome: str, fallback: str) -> str:
         return self.service.sanitizar_nome_arquivo(nome, fallback)
 
-    def _normalizar_dado(self, valor: str) -> str:
-        return self.service.normalizar_dado(valor, self._build_config())
+    def _normalizar_dado(self, valor: str, cfg: GeracaoConfig | None = None) -> str:
+        cfg = cfg or self._build_config()
+        return self.service.normalizar_dado(valor, cfg)
 
-    def _gerar_imagem_obj(self, dado: str) -> Image.Image:
-        return self.service.gerar_imagem_obj(dado, self._build_config())
+    def _gerar_imagem_obj(self, dado: str, cfg: GeracaoConfig | None = None) -> Image.Image:
+        cfg = cfg or self._build_config()
+        return self.service.gerar_imagem_obj(dado, cfg)
 
     def atualizar_preview(self):
-        amostra = self._normalizar_dado("123456789")
+        cfg = self._build_config()
+        amostra = self._normalizar_dado("123456789", cfg)
         try:
-            img = self._gerar_imagem_obj(amostra)
+            img = self._gerar_imagem_obj(amostra, cfg)
             img.thumbnail((260, 260))
             self.preview_image_ref = ImageTk.PhotoImage(img)
             self.preview_label.configure(image=self.preview_image_ref, text="")
@@ -235,12 +239,13 @@ class QRCodeGenerator:
 
     def gerar_imagens(self, codigos, formato, destino, emitir_sucesso=True):
         try:
+            cfg = self._build_config()
             os.makedirs(destino, exist_ok=True)
             total = len(codigos)
 
             nomes_usados = set()
             for i, codigo in enumerate(codigos, start=1):
-                dado = self._normalizar_dado(codigo)
+                dado = self._normalizar_dado(codigo, cfg)
                 nome_base = self._sanitizar_nome_arquivo(codigo, f"codigo_{i}")
                 nome_arquivo = nome_base
                 sufixo = 2
@@ -250,14 +255,14 @@ class QRCodeGenerator:
                 nomes_usados.add(nome_arquivo)
 
                 if formato == "svg":
-                    if self.tipo_codigo.get() == "barcode":
+                    if cfg.tipo_codigo == "barcode":
                         raise ValueError("Exportação SVG para código de barras não suportada nesta versão.")
                     qr = qrcode.make(dado, image_factory=SvgImage)
                     caminho_saida = os.path.join(destino, f"{nome_arquivo}.svg")
                     with open(caminho_saida, "wb") as f:
                         qr.save(f)
                 else:
-                    imagem = self._gerar_imagem_obj(dado)
+                    imagem = self._gerar_imagem_obj(dado, cfg)
                     imagem.save(os.path.join(destino, f"{nome_arquivo}.png"), format="PNG")
 
                 self.fila.put({"tipo": "progresso", "atual": i, "total": total, "codigo": codigo})
@@ -281,6 +286,7 @@ class QRCodeGenerator:
 
     def gerar_pdf(self, codigos, caminho_pdf):
         try:
+            cfg = self._build_config()
             pdf = canvas.Canvas(caminho_pdf, pagesize=A4)
             largura_pagina, altura_pagina = A4
 
@@ -291,7 +297,7 @@ class QRCodeGenerator:
             total = len(codigos)
 
             for i, codigo in enumerate(codigos, start=1):
-                imagem = self._gerar_imagem_obj(self._normalizar_dado(codigo))
+                imagem = self._gerar_imagem_obj(self._normalizar_dado(codigo, cfg), cfg)
                 buffer = io.BytesIO()
                 imagem.save(buffer, format="PNG")
                 buffer.seek(0)
@@ -405,7 +411,8 @@ class QRCodeGenerator:
             return
 
         try:
-            codigos, invalidos = self._validar_parametros_geracao(codigos)
+            cfg = self._build_config()
+            codigos, invalidos = self._validar_parametros_geracao(codigos, cfg)
         except ValueError as exc:
             messagebox.showwarning("Validação", str(exc))
             return
