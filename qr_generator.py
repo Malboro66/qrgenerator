@@ -7,7 +7,8 @@ import traceback
 import zipfile
 from dataclasses import dataclass
 
-from PIL import ImageTk
+import qrcode
+from PIL import Image, ImageTk
 from qrcode.image.svg import SvgImage
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
