@@ -1,0 +1,4 @@
+{"ts": "2026-02-13T14:54:19.377420+00:00", "level": "INFO", "logger": "qrgenerator", "msg": "Iniciando carregamento de arquivo", "event": "load_start", "operation": "load", "path": "C:/Users/PC/Desktop/Contagem bomba GP.xlsx"}
+{"ts": "2026-02-13T14:54:25.114894+00:00", "level": "INFO", "logger": "qrgenerator", "msg": "Carregamento concluído", "event": "load_done", "operation": "load", "path": "C:/Users/PC/Desktop/Contagem bomba GP.xlsx"}
+{"ts": "2026-02-13T16:15:51.328438+00:00", "level": "INFO", "logger": "qrgenerator", "msg": "Iniciando carregamento de arquivo", "event": "load_start", "operation": "load", "path": "C:/Users/PC/Desktop/Contagem bomba GP.xlsx"}
+{"ts": "2026-02-13T16:15:57.111715+00:00", "level": "INFO", "logger": "qrgenerator", "msg": "Carregamento concluído", "event": "load_done", "operation": "load", "path": "C:/Users/PC/Desktop/Contagem bomba GP.xlsx"}
