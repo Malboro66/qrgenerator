@@ -26,7 +26,12 @@ from logging_utils import setup_logging
 @dataclass
 class ItemCodigo:
     """Representa um item que será convertido em código visual."""
+
     valor: str
+
+
+class OperacaoCancelada(Exception):
+    """Sinaliza cancelamento de operação longa."""
 
 
 class QRCodeGenerator:
@@ -44,8 +49,14 @@ class QRCodeGenerator:
         self.arquivo_fonte = ""
         self.preview_image_ref = None
         self._preview_backend_error_shown = False
+        self.cancelar_evento = threading.Event()
 
-        self.qr_size = tk.IntVar(value=250)
+        self.qr_width_cm = tk.DoubleVar(value=4.0)
+        self.qr_height_cm = tk.DoubleVar(value=4.0)
+        self.barcode_width_cm = tk.DoubleVar(value=8.0)
+        self.barcode_height_cm = tk.DoubleVar(value=3.0)
+        self.keep_qr_ratio = tk.BooleanVar(value=True)
+        self.keep_barcode_ratio = tk.BooleanVar(value=True)
         self.qr_foreground_color = tk.StringVar(value="black")
         self.qr_background_color = tk.StringVar(value="white")
         self.modo = tk.StringVar(value="texto")
@@ -83,6 +94,14 @@ class QRCodeGenerator:
         )
         self.generate_button.grid(row=0, column=2, padx=5, pady=5)
 
+        self.cancel_button = ttk.Button(
+            topo,
+            text="Cancelar",
+            state="disabled",
+            command=self.cancelar_operacao,
+        )
+        self.cancel_button.grid(row=0, column=13, padx=5, pady=5)
+
         ttk.Label(topo, text="Formato de saída:").grid(row=0, column=3, sticky="e", padx=(20, 5))
         self.formato_combo = ttk.Combobox(
             topo,
@@ -93,6 +112,23 @@ class QRCodeGenerator:
         )
         self.formato_combo.grid(row=0, column=4, padx=5, pady=5, sticky="w")
         self.formato_combo.set(self.formato_saida.get())
+
+        ttk.Label(topo, text="QR (cm LxA):").grid(row=0, column=5, sticky="e", padx=(20, 5))
+        self.qr_w_spin = ttk.Spinbox(topo, from_=1.0, to=30.0, increment=0.1, textvariable=self.qr_width_cm, width=5, command=self.atualizar_preview)
+        self.qr_w_spin.grid(row=0, column=6, padx=(0, 2), pady=5, sticky="w")
+        self.qr_h_spin = ttk.Spinbox(topo, from_=1.0, to=30.0, increment=0.1, textvariable=self.qr_height_cm, width=5, command=self.atualizar_preview)
+        self.qr_h_spin.grid(row=0, column=7, padx=(2, 5), pady=5, sticky="w")
+        ttk.Checkbutton(topo, text="Manter proporção QR", variable=self.keep_qr_ratio, command=self.atualizar_preview).grid(row=0, column=8, padx=5, pady=5, sticky="w")
+
+        ttk.Label(topo, text="Barra (cm LxA):").grid(row=0, column=9, sticky="e", padx=(20, 5))
+        self.bar_w_spin = ttk.Spinbox(topo, from_=1.0, to=40.0, increment=0.1, textvariable=self.barcode_width_cm, width=5, command=self.atualizar_preview)
+        self.bar_w_spin.grid(row=0, column=10, padx=(0, 2), pady=5, sticky="w")
+        self.bar_h_spin = ttk.Spinbox(topo, from_=1.0, to=20.0, increment=0.1, textvariable=self.barcode_height_cm, width=5, command=self.atualizar_preview)
+        self.bar_h_spin.grid(row=0, column=11, padx=(2, 5), pady=5, sticky="w")
+        ttk.Checkbutton(topo, text="Manter proporção Barra", variable=self.keep_barcode_ratio, command=self.atualizar_preview).grid(row=0, column=12, padx=5, pady=5, sticky="w")
+
+        for spin in (self.qr_w_spin, self.qr_h_spin, self.bar_w_spin, self.bar_h_spin):
+            spin.bind("<FocusOut>", lambda _e: self.atualizar_preview())
 
         ttk.Label(topo, text="Tipo:").grid(row=1, column=0, sticky="w", padx=5)
         ttk.Radiobutton(
@@ -165,6 +201,13 @@ class QRCodeGenerator:
             self.texto_controls.grid_forget()
             self.numerico_controls.grid(row=3, column=0, columnspan=3, sticky="w", padx=5, pady=3)
 
+    def cancelar_operacao(self):
+        if not self._geracao_em_andamento:
+            return
+        self.cancelar_evento.set()
+        self.progress_label_var.set("Cancelando operação...")
+        self.cancel_button.configure(state="disabled")
+
     def selecionar_arquivo(self):
         if self._carregamento_em_andamento or self._geracao_em_andamento:
             return
@@ -214,7 +257,12 @@ class QRCodeGenerator:
 
     def _build_config(self) -> GeracaoConfig:
         return GeracaoConfig(
-            qr_size=int(self.qr_size.get()),
+            qr_width_cm=float(self.qr_width_cm.get()),
+            qr_height_cm=float(self.qr_height_cm.get()),
+            barcode_width_cm=float(self.barcode_width_cm.get()),
+            barcode_height_cm=float(self.barcode_height_cm.get()),
+            keep_qr_ratio=bool(self.keep_qr_ratio.get()),
+            keep_barcode_ratio=bool(self.keep_barcode_ratio.get()),
             foreground=self.qr_foreground_color.get(),
             background=self.qr_background_color.get(),
             tipo_codigo=self.tipo_codigo.get(),
@@ -308,6 +356,8 @@ class QRCodeGenerator:
 
             nomes_usados = set()
             for i, codigo in enumerate(codigos, start=1):
+                if self.cancelar_evento.is_set():
+                    raise OperacaoCancelada("Operação cancelada pelo usuário.")
                 dado = self._normalizar_dado(codigo, cfg)
                 nome_base = self._sanitizar_nome_arquivo(codigo, f"codigo_{i}")
                 nome_arquivo = nome_base
@@ -362,6 +412,8 @@ class QRCodeGenerator:
             total = len(codigos)
 
             for i, codigo in enumerate(codigos, start=1):
+                if self.cancelar_evento.is_set():
+                    raise OperacaoCancelada("Operação cancelada pelo usuário.")
                 imagem = self._gerar_imagem_obj(self._normalizar_dado(codigo, cfg), cfg)
                 buffer = io.BytesIO()
                 imagem.save(buffer, format="PNG")
@@ -389,6 +441,7 @@ class QRCodeGenerator:
 
     def _iniciar_progresso(self, total):
         self._geracao_em_andamento = True
+        self.cancelar_evento.clear()
         self.progress_bar.stop()
         self.progress_bar.configure(mode="determinate", maximum=max(total, 1))
         self.progress_bar["value"] = 0
@@ -396,13 +449,16 @@ class QRCodeGenerator:
         self.progress_frame.pack(fill="x")
         self.generate_button.configure(state="disabled")
         self.select_button.configure(state="disabled")
+        self.cancel_button.configure(state="normal")
 
     def _finalizar_progresso(self):
         self._geracao_em_andamento = False
         self._carregamento_em_andamento = False
+        self.cancelar_evento.clear()
         self.progress_bar.stop()
         self.progress_frame.pack_forget()
         self.select_button.configure(state="normal")
+        self.cancel_button.configure(state="disabled")
         if self.df is not None and self.column_combo.get():
             self.generate_button.configure(state="normal")
 
@@ -426,6 +482,9 @@ class QRCodeGenerator:
                     if detalhe:
                         erro_msg = f"{erro_msg}\n\nDetalhes técnicos:\n{detalhe}"
                     messagebox.showerror("Erro", erro_msg)
+                elif msg["tipo"] == "cancelado":
+                    self._finalizar_progresso()
+                    messagebox.showinfo("Cancelado", msg.get("msg", "Operação cancelada."))
                 elif msg["tipo"] == "carregamento_sucesso":
                     self.progress_bar.stop()
                     self.progress_frame.pack_forget()
@@ -462,6 +521,9 @@ class QRCodeGenerator:
                 self.gerar_zip(codigos, destino)
             else:
                 self.gerar_imagens(codigos, formato, destino)
+        except OperacaoCancelada as exc:
+            self.logger.info("Geração cancelada", extra={"event": "generate_cancel", "operation": formato, "path": str(destino)})
+            self.fila.put({"tipo": "cancelado", "msg": str(exc)})
         except Exception as exc:
             self.logger.exception("Falha na geração", extra={"event": "generate_error", "operation": formato, "path": str(destino), "erro": str(exc)})
             self.fila.put({"tipo": "erro", "msg": str(exc), "detalhe": traceback.format_exc(limit=3)})
