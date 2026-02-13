@@ -18,3 +18,5 @@
 {"ts": "2026-02-13T18:49:38.584053+00:00", "level": "INFO", "logger": "qrgenerator", "msg": "Carregamento concluído", "event": "load_done", "operation": "load", "path": "C:/Users/PC/Desktop/Contagem bomba GP.xlsx"}
 {"ts": "2026-02-13T18:50:29.596129+00:00", "level": "INFO", "logger": "qrgenerator", "msg": "Iniciando geração", "event": "generate_start", "operation": "pdf", "path": "C:/Users/PC/Desktop/teste1.pdf", "total": 320}
 {"ts": "2026-02-13T18:50:33.575457+00:00", "level": "INFO", "logger": "qrgenerator", "msg": "PDF gerado com sucesso", "event": "generate_done", "operation": "pdf", "path": "C:/Users/PC/Desktop/teste1.pdf", "total": 320}
+{"ts": "2026-02-13T20:17:54.612449+00:00", "level": "INFO", "logger": "qrgenerator", "msg": "Iniciando carregamento de arquivo", "event": "load_start", "operation": "load", "path": "C:/Users/PC/Desktop/lista motor 27-01.xlsx"}
+{"ts": "2026-02-13T20:17:56.458666+00:00", "level": "INFO", "logger": "qrgenerator", "msg": "Carregamento concluído", "event": "load_done", "operation": "load", "path": "C:/Users/PC/Desktop/lista motor 27-01.xlsx"}
