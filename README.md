@@ -55,7 +55,7 @@ pip install pandas qrcode reportlab pillow openpyxl python-barcode
 4.  **Select your data file** (Excel or CSV) using the "Selecionar Arquivo" button.
 5.  **Choose the column** that contains the data for the QR codes.
 6.  **Customize the QR code settings** as needed (size, color, logo, etc.).
-7.  **Select the export format** (PDF, PNG, ZIP).
+7.  **Select the export format** (PDF, PNG, ZIP, SVG for QR) using the visible "Formato de saída" selector.
 8.  **Click "Gerar QR Codes"** and choose a location to save the generated file(s).
 
 ## Screenshots

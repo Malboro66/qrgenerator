@@ -81,6 +81,17 @@ class QRCodeGenerator:
         )
         self.generate_button.grid(row=0, column=2, padx=5, pady=5)
 
+        ttk.Label(topo, text="Formato de saída:").grid(row=0, column=3, sticky="e", padx=(20, 5))
+        self.formato_combo = ttk.Combobox(
+            topo,
+            textvariable=self.formato_saida,
+            state="readonly",
+            width=8,
+            values=["pdf", "png", "zip", "svg"],
+        )
+        self.formato_combo.grid(row=0, column=4, padx=5, pady=5, sticky="w")
+        self.formato_combo.set(self.formato_saida.get())
+
         ttk.Label(topo, text="Tipo:").grid(row=1, column=0, sticky="w", padx=5)
         ttk.Radiobutton(
             topo,
