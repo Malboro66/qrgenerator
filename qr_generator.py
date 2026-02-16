@@ -128,6 +128,9 @@ class QRCodeGenerator:
             foreground=[("disabled", "#9ca3af"), ("!disabled", "white")],
             background=[("disabled", "#e5e7eb"), ("!disabled", "#dc2626")],
         )
+        self.formato_combo.grid(row=0, column=1, padx=self.space_sm, pady=self.space_sm, sticky="w")
+        self.formato_combo.set(self.formato_saida.get())
+        ttk.Label(config_frame, text="(SVG apenas para QR)", style="SectionHint.TLabel").grid(row=0, column=2, padx=(0, self.space_sm), sticky="w")
 
         self.style.configure("Muted.TLabel", foreground="#4b5563")
         self.style.configure("SectionHint.TLabel", foreground="#6b7280", font=("Segoe UI", 9))
