@@ -88,6 +88,7 @@ class QRCodeGenerator:
         self.space_sm = 8
         self.space_md = 12
         self.space_lg = 16
+        self.etapa_atual = 1
 
         self._configurar_estilos()
         self._criar_interface()
@@ -146,27 +147,44 @@ class QRCodeGenerator:
         self.style.configure("Success.Horizontal.TProgressbar", troughcolor="#dcfce7", background="#16a34a", bordercolor="#86efac", lightcolor="#22c55e", darkcolor="#15803d")
         self.style.configure("Error.Horizontal.TProgressbar", troughcolor="#fee2e2", background="#dc2626", bordercolor="#fca5a5", lightcolor="#ef4444", darkcolor="#b91c1c")
 
+        self.style.configure("Step.TButton", padding=(12, 6), font=("Segoe UI", 10, "bold"))
+        self.style.configure("StepActive.TButton", padding=(12, 6), font=("Segoe UI", 10, "bold"))
+        self.style.map(
+            "StepActive.TButton",
+            foreground=[("!disabled", "white")],
+            background=[("!disabled", "#2563eb")],
+        )
+
     def _criar_interface(self):
         conteudo = ttk.Frame(self.root, padding=self.space_md)
         conteudo.pack(fill="x")
 
-        dados_frame = ttk.LabelFrame(conteudo, text="1) Entrada de dados", padding=self.space_md)
-        dados_frame.pack(fill="x", pady=(0, self.space_sm))
+        self.stepper_frame = ttk.Frame(conteudo)
+        self.stepper_frame.pack(fill="x", pady=(0, self.space_sm))
+        self.step1_button = ttk.Button(self.stepper_frame, text="1. Entrada", style="Step.TButton", command=lambda: self._definir_etapa(1))
+        self.step1_button.pack(side="left", padx=(0, self.space_sm))
+        self.step2_button = ttk.Button(self.stepper_frame, text="2. Configuração", style="Step.TButton", command=lambda: self._definir_etapa(2))
+        self.step2_button.pack(side="left", padx=(0, self.space_sm))
+        self.step3_button = ttk.Button(self.stepper_frame, text="3. Ação", style="Step.TButton", command=lambda: self._definir_etapa(3))
+        self.step3_button.pack(side="left")
 
-        self.select_button = ttk.Button(dados_frame, text="1. Selecionar planilha", command=self.selecionar_arquivo)
+        self.dados_frame = ttk.LabelFrame(conteudo, text="1) Entrada de dados", padding=self.space_md)
+        self.dados_frame.pack(fill="x", pady=(0, self.space_sm))
+
+        self.select_button = ttk.Button(self.dados_frame, text="1. Selecionar planilha", command=self.selecionar_arquivo)
         self.select_button.grid(row=0, column=0, padx=self.space_sm, pady=self.space_sm, sticky="w")
 
-        ttk.Label(dados_frame, text="Coluna:").grid(row=0, column=1, padx=(self.space_md, self.space_sm), pady=self.space_sm, sticky="e")
-        self.column_combo = ttk.Combobox(dados_frame, state="disabled", width=35, style="App.TCombobox")
+        ttk.Label(self.dados_frame, text="Coluna:").grid(row=0, column=1, padx=(self.space_md, self.space_sm), pady=self.space_sm, sticky="e")
+        self.column_combo = ttk.Combobox(self.dados_frame, state="disabled", width=35, style="App.TCombobox")
         self.column_combo.grid(row=0, column=2, padx=self.space_sm, pady=self.space_sm, sticky="w")
-        self.column_combo.bind("<<ComboboxSelected>>", lambda _e: self.atualizar_preview())
+        self.column_combo.bind("<<ComboboxSelected>>", self._ao_selecionar_coluna)
 
-        config_frame = ttk.LabelFrame(conteudo, text="2) Configuração", padding=self.space_md)
-        config_frame.pack(fill="x", pady=(0, self.space_sm))
+        self.config_frame = ttk.LabelFrame(conteudo, text="2) Configuração", padding=self.space_md)
+        self.config_frame.pack(fill="x", pady=(0, self.space_sm))
 
-        ttk.Label(config_frame, text="Formato de saída").grid(row=0, column=0, sticky="e", padx=(0, self.space_sm), pady=self.space_sm)
+        ttk.Label(self.config_frame, text="Formato de saída").grid(row=0, column=0, sticky="e", padx=(0, self.space_sm), pady=self.space_sm)
         self.formato_combo = ttk.Combobox(
-            config_frame,
+            self.config_frame,
             style="App.TCombobox",
             textvariable=self.formato_saida,
             state="readonly",
@@ -175,62 +193,62 @@ class QRCodeGenerator:
         )
         self.formato_combo.grid(row=0, column=1, padx=self.space_sm, pady=self.space_sm, sticky="w")
         self.formato_combo.set(self.formato_saida.get())
-        ttk.Label(config_frame, text="(SVG apenas para QR)", style="SectionHint.TLabel").grid(row=0, column=2, padx=(0, self.space_sm), sticky="w")
+        ttk.Label(self.config_frame, text="(SVG apenas para QR)", style="SectionHint.TLabel").grid(row=0, column=2, padx=(0, self.space_sm), sticky="w")
 
-        ttk.Label(config_frame, text="QR (cm LxA):").grid(row=1, column=0, sticky="e", padx=(0, 5), pady=5)
-        self.qr_w_spin = ttk.Spinbox(config_frame, from_=1.0, to=30.0, increment=0.1, textvariable=self.qr_width_cm, width=5, command=self.atualizar_preview, style="App.TSpinbox")
+        ttk.Label(self.config_frame, text="QR (cm LxA):").grid(row=1, column=0, sticky="e", padx=(0, 5), pady=5)
+        self.qr_w_spin = ttk.Spinbox(self.config_frame, from_=1.0, to=30.0, increment=0.1, textvariable=self.qr_width_cm, width=5, command=self.atualizar_preview, style="App.TSpinbox")
         self.qr_w_spin.grid(row=1, column=1, padx=(0, 2), pady=5, sticky="w")
-        self.qr_h_spin = ttk.Spinbox(config_frame, from_=1.0, to=30.0, increment=0.1, textvariable=self.qr_height_cm, width=5, command=self.atualizar_preview, style="App.TSpinbox")
+        self.qr_h_spin = ttk.Spinbox(self.config_frame, from_=1.0, to=30.0, increment=0.1, textvariable=self.qr_height_cm, width=5, command=self.atualizar_preview, style="App.TSpinbox")
         self.qr_h_spin.grid(row=1, column=2, padx=(2, 5), pady=5, sticky="w")
-        ttk.Checkbutton(config_frame, text="Manter proporção QR", variable=self.keep_qr_ratio, command=self.atualizar_preview).grid(row=1, column=3, padx=5, pady=5, sticky="w")
+        ttk.Checkbutton(self.config_frame, text="Manter proporção QR", variable=self.keep_qr_ratio, command=self.atualizar_preview).grid(row=1, column=3, padx=5, pady=5, sticky="w")
 
-        ttk.Label(config_frame, text="Barra (cm LxA):").grid(row=2, column=0, sticky="e", padx=(0, 5), pady=5)
-        self.bar_w_spin = ttk.Spinbox(config_frame, from_=1.0, to=40.0, increment=0.1, textvariable=self.barcode_width_cm, width=5, command=self.atualizar_preview, style="App.TSpinbox")
+        ttk.Label(self.config_frame, text="Barra (cm LxA):").grid(row=2, column=0, sticky="e", padx=(0, 5), pady=5)
+        self.bar_w_spin = ttk.Spinbox(self.config_frame, from_=1.0, to=40.0, increment=0.1, textvariable=self.barcode_width_cm, width=5, command=self.atualizar_preview, style="App.TSpinbox")
         self.bar_w_spin.grid(row=2, column=1, padx=(0, 2), pady=5, sticky="w")
-        self.bar_h_spin = ttk.Spinbox(config_frame, from_=1.0, to=20.0, increment=0.1, textvariable=self.barcode_height_cm, width=5, command=self.atualizar_preview, style="App.TSpinbox")
+        self.bar_h_spin = ttk.Spinbox(self.config_frame, from_=1.0, to=20.0, increment=0.1, textvariable=self.barcode_height_cm, width=5, command=self.atualizar_preview, style="App.TSpinbox")
         self.bar_h_spin.grid(row=2, column=2, padx=(2, 5), pady=5, sticky="w")
-        ttk.Checkbutton(config_frame, text="Manter proporção Barra", variable=self.keep_barcode_ratio, command=self.atualizar_preview).grid(row=2, column=3, padx=5, pady=5, sticky="w")
+        ttk.Checkbutton(self.config_frame, text="Manter proporção Barra", variable=self.keep_barcode_ratio, command=self.atualizar_preview).grid(row=2, column=3, padx=5, pady=5, sticky="w")
 
         for spin in (self.qr_w_spin, self.qr_h_spin, self.bar_w_spin, self.bar_h_spin):
             spin.bind("<FocusOut>", lambda _e: self.atualizar_preview())
 
-        ttk.Label(config_frame, text="Tipo:").grid(row=3, column=0, sticky="e", padx=(0, 5), pady=5)
+        ttk.Label(self.config_frame, text="Tipo:").grid(row=3, column=0, sticky="e", padx=(0, 5), pady=5)
         ttk.Radiobutton(
-            config_frame,
+            self.config_frame,
             text="QR Code",
             variable=self.tipo_codigo,
             value="qrcode",
             command=self.atualizar_preview,
         ).grid(row=3, column=1, sticky="w")
         ttk.Radiobutton(
-            config_frame,
+            self.config_frame,
             text="Código de Barras (Code128)",
             variable=self.tipo_codigo,
             value="barcode",
             command=self.atualizar_preview,
         ).grid(row=3, column=2, columnspan=2, sticky="w")
 
-        ttk.Label(config_frame, text="Modo de dados:").grid(row=4, column=0, sticky="e", padx=(0, 5), pady=5)
+        ttk.Label(self.config_frame, text="Modo de dados:").grid(row=4, column=0, sticky="e", padx=(0, 5), pady=5)
         ttk.Radiobutton(
-            config_frame,
+            self.config_frame,
             text="Texto",
             variable=self.modo,
             value="texto",
             command=self.atualizar_controles_formato,
         ).grid(row=4, column=1, sticky="w")
         ttk.Radiobutton(
-            config_frame,
+            self.config_frame,
             text="Numérico",
             variable=self.modo,
             value="numerico",
             command=self.atualizar_controles_formato,
         ).grid(row=4, column=2, sticky="w")
 
-        self.texto_controls = ttk.Frame(config_frame)
+        self.texto_controls = ttk.Frame(self.config_frame)
         self.texto_controls.grid(row=5, column=0, columnspan=4, sticky="w", padx=5, pady=3)
         ttk.Label(self.texto_controls, text="Dados conforme coluna selecionada.").pack(anchor="w")
 
-        self.numerico_controls = ttk.Frame(config_frame)
+        self.numerico_controls = ttk.Frame(self.config_frame)
         ttk.Label(self.numerico_controls, text="Prefixo:").pack(side="left", padx=(0, 5))
         ttk.Entry(self.numerico_controls, textvariable=self.prefixo_numerico, width=10, style="App.TEntry").pack(
             side="left", padx=(0, 10)
@@ -240,10 +258,10 @@ class QRCodeGenerator:
 
         self.atualizar_controles_formato()
 
-        acao_status_frame = ttk.LabelFrame(conteudo, text="3) Ação + Status", padding=self.space_md)
-        acao_status_frame.pack(fill="x")
+        self.acao_status_frame = ttk.LabelFrame(conteudo, text="3) Ação + Status", padding=self.space_md)
+        self.acao_status_frame.pack(fill="x")
 
-        botoes_frame = ttk.Frame(acao_status_frame)
+        botoes_frame = ttk.Frame(self.acao_status_frame)
         botoes_frame.pack(fill="x", pady=(0, self.space_sm))
 
         self.generate_button = ttk.Button(
@@ -265,8 +283,8 @@ class QRCodeGenerator:
         self.cancel_button.pack(side="left")
 
         self.status_resumo_var = tk.StringVar(value="Pronto para iniciar. Selecione um arquivo para continuar.")
-        ttk.Label(acao_status_frame, textvariable=self.status_resumo_var).pack(anchor="w")
-        ttk.Label(acao_status_frame, text="Dica: o botão principal fica ativo após carregar um arquivo e escolher a coluna.", style="Muted.TLabel").pack(anchor="w", pady=(2, 0))
+        ttk.Label(self.acao_status_frame, textvariable=self.status_resumo_var).pack(anchor="w")
+        ttk.Label(self.acao_status_frame, text="Dica: o botão principal fica ativo após carregar um arquivo e escolher a coluna.", style="Muted.TLabel").pack(anchor="w", pady=(2, 0))
 
         preview_frame = ttk.LabelFrame(self.root, text="Pré-visualização", padding=self.space_md)
         preview_frame.pack(fill="both", expand=True, padx=self.space_md, pady=self.space_md)
@@ -291,7 +309,7 @@ class QRCodeGenerator:
         self.preview_label = ttk.Label(preview_frame)
         self.preview_label.pack(expand=True)
 
-        self.progress_frame = ttk.Frame(acao_status_frame, padding=(0, 4, 0, 0))
+        self.progress_frame = ttk.Frame(self.acao_status_frame, padding=(0, 4, 0, 0))
         self.progress_frame.pack(fill="x")
 
         self.progress_label_var = tk.StringVar(value="")
@@ -325,6 +343,50 @@ class QRCodeGenerator:
         )
         self.abrir_pasta_button.grid(row=2, column=2, sticky="e", pady=2)
         self.resultado_frame.columnconfigure(1, weight=1)
+        self._definir_etapa(1, forcar=True)
+
+    def _atualizar_stepper_visual(self):
+        botoes = {
+            1: self.step1_button,
+            2: self.step2_button,
+            3: self.step3_button,
+        }
+        for etapa, botao in botoes.items():
+            botao.configure(style="StepActive.TButton" if etapa == self.etapa_atual else "Step.TButton")
+
+        self.step2_button.configure(state="normal" if self.df is not None else "disabled")
+        self.step3_button.configure(state="normal" if (self.df is not None and self.column_combo.get()) else "disabled")
+
+    def _definir_etapa(self, etapa: int, forcar: bool = False):
+        if not forcar:
+            if etapa >= 2 and self.df is None:
+                messagebox.showwarning("Etapa bloqueada", "Para avançar para Configuração, selecione e carregue um arquivo.")
+                self.status_resumo_var.set("Etapa 2 bloqueada: selecione um arquivo primeiro.")
+                return
+            if etapa >= 3 and (self.df is None or not self.column_combo.get()):
+                messagebox.showwarning("Etapa bloqueada", "Para avançar para Ação, selecione uma coluna válida.")
+                self.status_resumo_var.set("Etapa 3 bloqueada: selecione uma coluna válida.")
+                return
+
+        self.etapa_atual = etapa
+        for frame in (self.dados_frame, self.config_frame, self.acao_status_frame):
+            frame.pack_forget()
+
+        if etapa == 1:
+            self.dados_frame.pack(fill="x", pady=(0, self.space_sm))
+            self.select_button.focus_set()
+        elif etapa == 2:
+            self.config_frame.pack(fill="x", pady=(0, self.space_sm))
+            self.formato_combo.focus_set()
+        else:
+            self.acao_status_frame.pack(fill="x")
+            self.generate_button.focus_set()
+
+        self._atualizar_stepper_visual()
+
+    def _ao_selecionar_coluna(self, _e=None):
+        self.atualizar_preview()
+        self._atualizar_stepper_visual()
 
     def _formatar_duracao(self, segundos: float | None) -> str:
         if segundos is None:
@@ -754,6 +816,7 @@ class QRCodeGenerator:
         self._inicio_geracao_ts = None
         if self.df is not None and self.column_combo.get():
             self.generate_button.configure(state="normal")
+        self._atualizar_stepper_visual()
 
     def verificar_fila(self):
         try:
@@ -819,6 +882,7 @@ class QRCodeGenerator:
                     else:
                         self.generate_button.configure(state="disabled")
                     self.atualizar_preview()
+                    self._atualizar_stepper_visual()
                 elif msg["tipo"] == "carregamento_erro":
                     self.progress_bar.stop()
                     self.progress_frame.pack_forget()
@@ -826,6 +890,7 @@ class QRCodeGenerator:
                     self.select_button.configure(state="normal")
                     self.column_combo.configure(state="disabled", values=[])
                     self.generate_button.configure(state="disabled")
+                    self._atualizar_stepper_visual()
                     self.status_resumo_var.set("Falha ao carregar arquivo. Tente novamente.")
                     self._atualizar_resumo_painel(processado=0, ignorados=0, caminho="", job_id="")
                     messagebox.showerror("Erro", f"Não foi possível abrir o arquivo: {msg.get('msg', '')}")
