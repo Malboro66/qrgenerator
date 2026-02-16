@@ -32,7 +32,6 @@ class ItemCodigo:
 
     valor: str
 
-
 class OperacaoCancelada(Exception):
     """Sinaliza cancelamento de operação longa."""
 
