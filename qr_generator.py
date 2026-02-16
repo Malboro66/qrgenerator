@@ -128,12 +128,23 @@ class QRCodeGenerator:
             foreground=[("disabled", "#9ca3af"), ("!disabled", "white")],
             background=[("disabled", "#e5e7eb"), ("!disabled", "#dc2626")],
         )
-        self.formato_combo.grid(row=0, column=1, padx=self.space_sm, pady=self.space_sm, sticky="w")
-        self.formato_combo.set(self.formato_saida.get())
-        ttk.Label(config_frame, text="(SVG apenas para QR)", style="SectionHint.TLabel").grid(row=0, column=2, padx=(0, self.space_sm), sticky="w")
 
         self.style.configure("Muted.TLabel", foreground="#4b5563")
         self.style.configure("SectionHint.TLabel", foreground="#6b7280", font=("Segoe UI", 9))
+
+        # Design system: campos e estados padronizados
+        self.style.configure("App.TEntry", fieldbackground="#ffffff", foreground="#111827", bordercolor="#9ca3af", lightcolor="#9ca3af", darkcolor="#9ca3af", padding=(6, 4))
+        self.style.map("App.TEntry", bordercolor=[("focus", "#2563eb"), ("disabled", "#d1d5db")], fieldbackground=[("disabled", "#f3f4f6"), ("!disabled", "#ffffff")], foreground=[("disabled", "#9ca3af"), ("!disabled", "#111827")])
+
+        self.style.configure("App.TCombobox", fieldbackground="#ffffff", foreground="#111827", bordercolor="#9ca3af", arrowsize=14, padding=(6, 4))
+        self.style.map("App.TCombobox", bordercolor=[("focus", "#2563eb"), ("disabled", "#d1d5db")], fieldbackground=[("readonly", "#ffffff"), ("disabled", "#f3f4f6")], foreground=[("disabled", "#9ca3af"), ("!disabled", "#111827")])
+
+        self.style.configure("App.TSpinbox", fieldbackground="#ffffff", foreground="#111827", bordercolor="#9ca3af", arrowsize=14, padding=(6, 4))
+        self.style.map("App.TSpinbox", bordercolor=[("focus", "#2563eb"), ("disabled", "#d1d5db")], fieldbackground=[("disabled", "#f3f4f6"), ("!disabled", "#ffffff")], foreground=[("disabled", "#9ca3af"), ("!disabled", "#111827")])
+
+        self.style.configure("App.Horizontal.TProgressbar", troughcolor="#e5e7eb", background="#2563eb", bordercolor="#d1d5db", lightcolor="#3b82f6", darkcolor="#1d4ed8")
+        self.style.configure("Success.Horizontal.TProgressbar", troughcolor="#dcfce7", background="#16a34a", bordercolor="#86efac", lightcolor="#22c55e", darkcolor="#15803d")
+        self.style.configure("Error.Horizontal.TProgressbar", troughcolor="#fee2e2", background="#dc2626", bordercolor="#fca5a5", lightcolor="#ef4444", darkcolor="#b91c1c")
 
     def _criar_interface(self):
         conteudo = ttk.Frame(self.root, padding=self.space_md)
@@ -146,7 +157,7 @@ class QRCodeGenerator:
         self.select_button.grid(row=0, column=0, padx=self.space_sm, pady=self.space_sm, sticky="w")
 
         ttk.Label(dados_frame, text="Coluna:").grid(row=0, column=1, padx=(self.space_md, self.space_sm), pady=self.space_sm, sticky="e")
-        self.column_combo = ttk.Combobox(dados_frame, state="disabled", width=35)
+        self.column_combo = ttk.Combobox(dados_frame, state="disabled", width=35, style="App.TCombobox")
         self.column_combo.grid(row=0, column=2, padx=self.space_sm, pady=self.space_sm, sticky="w")
         self.column_combo.bind("<<ComboboxSelected>>", lambda _e: self.atualizar_preview())
 
@@ -156,6 +167,7 @@ class QRCodeGenerator:
         ttk.Label(config_frame, text="Formato de saída").grid(row=0, column=0, sticky="e", padx=(0, self.space_sm), pady=self.space_sm)
         self.formato_combo = ttk.Combobox(
             config_frame,
+            style="App.TCombobox",
             textvariable=self.formato_saida,
             state="readonly",
             width=8,
@@ -166,16 +178,16 @@ class QRCodeGenerator:
         ttk.Label(config_frame, text="(SVG apenas para QR)", style="SectionHint.TLabel").grid(row=0, column=2, padx=(0, self.space_sm), sticky="w")
 
         ttk.Label(config_frame, text="QR (cm LxA):").grid(row=1, column=0, sticky="e", padx=(0, 5), pady=5)
-        self.qr_w_spin = ttk.Spinbox(config_frame, from_=1.0, to=30.0, increment=0.1, textvariable=self.qr_width_cm, width=5, command=self.atualizar_preview)
+        self.qr_w_spin = ttk.Spinbox(config_frame, from_=1.0, to=30.0, increment=0.1, textvariable=self.qr_width_cm, width=5, command=self.atualizar_preview, style="App.TSpinbox")
         self.qr_w_spin.grid(row=1, column=1, padx=(0, 2), pady=5, sticky="w")
-        self.qr_h_spin = ttk.Spinbox(config_frame, from_=1.0, to=30.0, increment=0.1, textvariable=self.qr_height_cm, width=5, command=self.atualizar_preview)
+        self.qr_h_spin = ttk.Spinbox(config_frame, from_=1.0, to=30.0, increment=0.1, textvariable=self.qr_height_cm, width=5, command=self.atualizar_preview, style="App.TSpinbox")
         self.qr_h_spin.grid(row=1, column=2, padx=(2, 5), pady=5, sticky="w")
         ttk.Checkbutton(config_frame, text="Manter proporção QR", variable=self.keep_qr_ratio, command=self.atualizar_preview).grid(row=1, column=3, padx=5, pady=5, sticky="w")
 
         ttk.Label(config_frame, text="Barra (cm LxA):").grid(row=2, column=0, sticky="e", padx=(0, 5), pady=5)
-        self.bar_w_spin = ttk.Spinbox(config_frame, from_=1.0, to=40.0, increment=0.1, textvariable=self.barcode_width_cm, width=5, command=self.atualizar_preview)
+        self.bar_w_spin = ttk.Spinbox(config_frame, from_=1.0, to=40.0, increment=0.1, textvariable=self.barcode_width_cm, width=5, command=self.atualizar_preview, style="App.TSpinbox")
         self.bar_w_spin.grid(row=2, column=1, padx=(0, 2), pady=5, sticky="w")
-        self.bar_h_spin = ttk.Spinbox(config_frame, from_=1.0, to=20.0, increment=0.1, textvariable=self.barcode_height_cm, width=5, command=self.atualizar_preview)
+        self.bar_h_spin = ttk.Spinbox(config_frame, from_=1.0, to=20.0, increment=0.1, textvariable=self.barcode_height_cm, width=5, command=self.atualizar_preview, style="App.TSpinbox")
         self.bar_h_spin.grid(row=2, column=2, padx=(2, 5), pady=5, sticky="w")
         ttk.Checkbutton(config_frame, text="Manter proporção Barra", variable=self.keep_barcode_ratio, command=self.atualizar_preview).grid(row=2, column=3, padx=5, pady=5, sticky="w")
 
@@ -220,11 +232,11 @@ class QRCodeGenerator:
 
         self.numerico_controls = ttk.Frame(config_frame)
         ttk.Label(self.numerico_controls, text="Prefixo:").pack(side="left", padx=(0, 5))
-        ttk.Entry(self.numerico_controls, textvariable=self.prefixo_numerico, width=10).pack(
+        ttk.Entry(self.numerico_controls, textvariable=self.prefixo_numerico, width=10, style="App.TEntry").pack(
             side="left", padx=(0, 10)
         )
         ttk.Label(self.numerico_controls, text="Sufixo:").pack(side="left", padx=(0, 5))
-        ttk.Entry(self.numerico_controls, textvariable=self.sufixo_numerico, width=10).pack(side="left")
+        ttk.Entry(self.numerico_controls, textvariable=self.sufixo_numerico, width=10, style="App.TEntry").pack(side="left")
 
         self.atualizar_controles_formato()
 
@@ -268,6 +280,7 @@ class QRCodeGenerator:
             state="readonly",
             width=6,
             values=["75%", "100%", "125%"],
+            style="App.TCombobox",
         )
         self.preview_zoom_combo.pack(side="left", padx=(self.space_sm, 0))
         self.preview_zoom_combo.bind("<<ComboboxSelected>>", lambda _e: self.atualizar_preview())
@@ -285,7 +298,7 @@ class QRCodeGenerator:
         self.progress_label = ttk.Label(self.progress_frame, textvariable=self.progress_label_var)
         self.progress_label.pack(anchor="w")
 
-        self.progress_bar = ttk.Progressbar(self.progress_frame, mode="determinate", maximum=100)
+        self.progress_bar = ttk.Progressbar(self.progress_frame, mode="determinate", maximum=100, style="App.Horizontal.TProgressbar")
         self.progress_bar.pack(fill="x", pady=(4, 0))
         self.progress_frame.pack_forget()
 
@@ -749,7 +762,7 @@ class QRCodeGenerator:
                 if msg["tipo"] == "progresso":
                     atual = msg.get("atual", 0)
                     total = msg.get("total", 1)
-                    self.progress_bar.configure(maximum=max(total, 1))
+                    self.progress_bar.configure(maximum=max(total, 1), style="App.Horizontal.TProgressbar")
                     self.progress_bar["value"] = atual
                     self.progress_label_var.set(f"Gerando {atual}/{total}: {msg.get('codigo', '')}")
                     self._processados_atuais = atual
@@ -760,6 +773,7 @@ class QRCodeGenerator:
                     self._atualizar_job_progresso(atual)
                 elif msg["tipo"] == "sucesso":
                     self._atualizar_resumo_painel(caminho=msg.get("caminho", ""), processado=self._total_planejado)
+                    self.progress_bar.configure(style="Success.Horizontal.TProgressbar")
                     self._processados_atuais = self._total_planejado
                     self._registrar_metricas_execucao("completed")
                     self._finalizar_job("completed")
@@ -768,6 +782,7 @@ class QRCodeGenerator:
                     messagebox.showinfo("Sucesso", f"Arquivo(s) gerado(s) em: {msg.get('caminho', '')}")
                 elif msg["tipo"] == "erro":
                     self._atualizar_resumo_painel(caminho=self._ultimo_destino_saida)
+                    self.progress_bar.configure(style="Error.Horizontal.TProgressbar")
                     self._registrar_metricas_execucao("error", erro=msg.get("msg", ""))
                     self._finalizar_job("error", erro=msg.get("msg", ""))
                     self._finalizar_progresso()
@@ -779,6 +794,7 @@ class QRCodeGenerator:
                     messagebox.showerror("Erro", erro_msg)
                 elif msg["tipo"] == "cancelado":
                     self._atualizar_resumo_painel(caminho=self._ultimo_destino_saida)
+                    self.progress_bar.configure(style="App.Horizontal.TProgressbar")
                     self._registrar_metricas_execucao("cancelled", erro=msg.get("msg", ""))
                     self._finalizar_job("cancelled", erro=msg.get("msg", ""))
                     self._finalizar_progresso()
