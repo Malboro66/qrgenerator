@@ -15,7 +15,7 @@ A professional desktop application for generating and customizing QR codes **and
     - **PNG**: Export individual QR codes as high-quality PNG images.
     - **ZIP**: Create a ZIP archive containing all generated QR codes as PNG images.
 - **Advanced Customization**:
-    - **Size**: Adjust the size of the QR codes in pixels.
+    - **Size**: Adjust QR/barcode width and height in centimeters, with optional "keep ratio" toggles.
     - **Colors**: Choose custom foreground and background colors.
     - **Logo Integration**: Add your own logo to the center of the QR codes.
 - **Generation Modes**:
@@ -26,6 +26,8 @@ A professional desktop application for generating and customizing QR codes **and
     - **Barcode (Code128)**: Linear barcode option for labels and inventory.
 - **Responsive Interface**: Asynchronous processing ensures the application remains responsive during QR code generation.
 - **Real-Time Progress**: A progress bar and status updates keep you informed during the generation process.
+- **Document Preview (1 page)**: Preview area can render a one-page layout based on the selected column before export.
+- **Structured Logging**: Operational events and errors are recorded in `logs/app.log` (JSON lines) for support/diagnostics.
 
 ## Requirements
 
@@ -36,10 +38,11 @@ To run this application, you will need Python 3.7 or higher and the following li
 - `reportlab`
 - `Pillow`
 - `openpyxl`
+- `python-barcode` *(optional, recommended for Code128 without renderPM backend)*
 
 You can install them using pip:
 ```bash
-pip install pandas qrcode reportlab pillow openpyxl
+pip install pandas qrcode reportlab pillow openpyxl python-barcode
 ```
 
 ## How to Use
@@ -53,7 +56,7 @@ pip install pandas qrcode reportlab pillow openpyxl
 4.  **Select your data file** (Excel or CSV) using the "Selecionar Arquivo" button.
 5.  **Choose the column** that contains the data for the QR codes.
 6.  **Customize the QR code settings** as needed (size, color, logo, etc.).
-7.  **Select the export format** (PDF, PNG, ZIP).
+7.  **Select the export format** (PDF, PNG, ZIP, SVG for QR) using the visible "Formato de saída" selector.
 8.  **Click "Gerar QR Codes"** and choose a location to save the generated file(s).
 
 ## Screenshots
