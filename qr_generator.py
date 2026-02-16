@@ -70,6 +70,9 @@ class QRCodeGenerator:
         self.formato_saida = tk.StringVar(value="pdf")
         self.tipo_codigo = tk.StringVar(value="qrcode")
         self.preview_zoom = tk.StringVar(value="100%")
+        self.preview_preset = tk.StringVar(value="A4")
+        self.preview_margin_cm = tk.DoubleVar(value=2.0)
+        self.preview_spacing_cm = tk.DoubleVar(value=1.0)
         self.qr_size = tk.IntVar(value=300)  # Compat: testes legados
         self.formato_exportacao = self.formato_saida  # Compat: nome legado
 
@@ -291,6 +294,44 @@ class QRCodeGenerator:
 
         preview_toolbar = ttk.Frame(preview_frame)
         preview_toolbar.pack(fill="x", pady=(0, self.space_sm))
+        ttk.Label(preview_toolbar, text="Preset:").pack(side="left")
+        self.preview_preset_combo = ttk.Combobox(
+            preview_toolbar,
+            textvariable=self.preview_preset,
+            state="readonly",
+            width=20,
+            values=["A4", "Etiqueta 40x20 mm", "Etiqueta 60x40 mm"],
+            style="App.TCombobox",
+        )
+        self.preview_preset_combo.pack(side="left", padx=(self.space_sm, self.space_md))
+        self.preview_preset_combo.bind("<<ComboboxSelected>>", lambda _e: self.atualizar_preview())
+
+        ttk.Label(preview_toolbar, text="Margem (cm):").pack(side="left")
+        self.preview_margin_spin = ttk.Spinbox(
+            preview_toolbar,
+            from_=0.2,
+            to=5.0,
+            increment=0.1,
+            textvariable=self.preview_margin_cm,
+            width=5,
+            command=self.atualizar_preview,
+            style="App.TSpinbox",
+        )
+        self.preview_margin_spin.pack(side="left", padx=(self.space_sm, self.space_md))
+
+        ttk.Label(preview_toolbar, text="Espaço (cm):").pack(side="left")
+        self.preview_spacing_spin = ttk.Spinbox(
+            preview_toolbar,
+            from_=0.1,
+            to=5.0,
+            increment=0.1,
+            textvariable=self.preview_spacing_cm,
+            width=5,
+            command=self.atualizar_preview,
+            style="App.TSpinbox",
+        )
+        self.preview_spacing_spin.pack(side="left", padx=(self.space_sm, self.space_md))
+
         ttk.Label(preview_toolbar, text="Zoom:").pack(side="left")
         self.preview_zoom_combo = ttk.Combobox(
             preview_toolbar,
@@ -302,6 +343,8 @@ class QRCodeGenerator:
         )
         self.preview_zoom_combo.pack(side="left", padx=(self.space_sm, 0))
         self.preview_zoom_combo.bind("<<ComboboxSelected>>", lambda _e: self.atualizar_preview())
+        self.preview_margin_spin.bind("<FocusOut>", lambda _e: self.atualizar_preview())
+        self.preview_spacing_spin.bind("<FocusOut>", lambda _e: self.atualizar_preview())
 
         self.preview_escala_var = tk.StringVar(value="Escala visual: 100%")
         ttk.Label(preview_toolbar, textvariable=self.preview_escala_var, style="SectionHint.TLabel").pack(side="right")
@@ -616,7 +659,19 @@ class QRCodeGenerator:
         return codigos[: self.max_itens_preview_pagina]
 
     def _gerar_preview_documento(self, codigos, cfg: GeracaoConfig) -> Image.Image:
-        largura, altura = map(int, A4)
+        preset = self.preview_preset.get()
+        if preset == "Etiqueta 40x20 mm":
+            largura, altura = int(40 * mm), int(20 * mm)
+        elif preset == "Etiqueta 60x40 mm":
+            largura, altura = int(60 * mm), int(40 * mm)
+        else:
+            largura, altura = map(int, A4)
+
+        margem_cm = max(0.2, float(self.preview_margin_cm.get()))
+        espaco_cm = max(0.1, float(self.preview_spacing_cm.get()))
+        margem_px = int(margem_cm * 10 * mm)
+        espaco_px = int(espaco_cm * 10 * mm)
+
         fundo = Image.new("RGB", (largura + 120, altura + 120), "#e5e7eb")
         draw = ImageDraw.Draw(fundo)
         draw.rounded_rectangle((70, 70, largura + 90, altura + 90), radius=10, fill="#cbd5e1")
@@ -624,15 +679,18 @@ class QRCodeGenerator:
         preview = Image.new("RGB", (largura, altura), "white")
         draw_preview = ImageDraw.Draw(preview)
 
-        x = int(20 * mm)
-        y = int(40 * mm)
-        tamanho = int(35 * mm)
-        margem = int(10 * mm)
+        x = margem_px
+        y = margem_px
+        item_largura = max(24, int(cfg.qr_width_cm * 10 * mm))
+        item_altura = max(24, int(cfg.qr_height_cm * 10 * mm))
+        if cfg.tipo_codigo == "barcode":
+            item_largura = max(24, int(cfg.barcode_width_cm * 10 * mm))
+            item_altura = max(24, int(cfg.barcode_height_cm * 10 * mm))
 
         draw_preview.rectangle((x, y, largura - x, altura - y), outline="#9ca3af", width=2)
 
         pixels_por_cm = mm * 10
-        for cm in range(0, int((largura - 2 * x) / pixels_por_cm) + 1, 5):
+        for cm in range(0, int(max(1, (largura - 2 * x)) / pixels_por_cm) + 1, 5):
             px = int(x + cm * pixels_por_cm)
             draw_preview.line((px, y - 8, px, y), fill="#6b7280", width=1)
             draw_preview.text((px + 2, y - 24), f"{cm}cm", fill="#6b7280")
@@ -642,14 +700,14 @@ class QRCodeGenerator:
 
         for codigo in codigos:
             img = self._gerar_imagem_obj(self._normalizar_dado(codigo, cfg), cfg)
-            img = img.resize((tamanho, tamanho))
+            img = img.resize((item_largura, item_altura))
             preview.paste(img, (x_cursor, y_cursor))
 
-            x_cursor += tamanho + margem
-            if x_cursor + tamanho > largura - int(20 * mm):
+            x_cursor += item_largura + espaco_px
+            if x_cursor + item_largura > largura - margem_px:
                 x_cursor = x
-                y_cursor += tamanho + margem
-            if y_cursor + tamanho > altura - int(20 * mm):
+                y_cursor += item_altura + espaco_px
+            if y_cursor + item_altura > altura - margem_px:
                 break
 
         fundo.paste(preview, (60, 60))
