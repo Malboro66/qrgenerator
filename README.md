@@ -26,6 +26,7 @@ A professional desktop application for generating and customizing QR codes **and
     - **Barcode (Code128)**: Linear barcode option for labels and inventory.
 - **Responsive Interface**: Asynchronous processing ensures the application remains responsive during QR code generation.
 - **Real-Time Progress**: A progress bar and status updates keep you informed during the generation process.
+- **Document Preview (1 page)**: Preview area can render a one-page layout based on the selected column before export.
 - **Structured Logging**: Operational events and errors are recorded in `logs/app.log` (JSON lines) for support/diagnostics.
 
 ## Requirements

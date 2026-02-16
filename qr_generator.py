@@ -56,6 +56,7 @@ class QRCodeGenerator:
         self.sufixo_numerico = tk.StringVar(value="")
         self.max_codigos_por_lote = 5000
         self.max_tamanho_dado = 512
+        self.max_itens_preview_pagina = 24
 
         self._criar_interface()
         self.atualizar_preview()
@@ -72,6 +73,7 @@ class QRCodeGenerator:
 
         self.column_combo = ttk.Combobox(topo, state="disabled", width=35)
         self.column_combo.grid(row=0, column=1, padx=5, pady=5, sticky="w")
+        self.column_combo.bind("<<ComboboxSelected>>", lambda _e: self.atualizar_preview())
 
         self.generate_button = ttk.Button(
             topo,
@@ -238,12 +240,56 @@ class QRCodeGenerator:
         cfg = cfg or self._build_config()
         return self.service.gerar_imagem_obj(dado, cfg)
 
+    def _extrair_codigos_preview(self):
+        if self.df is None or not self.column_combo.get():
+            return []
+        codigos = self._obter_valores_coluna(self.df, self.column_combo.get())
+        if not codigos:
+            return []
+        try:
+            cfg = self._build_config()
+            codigos, _ = self._validar_parametros_geracao(codigos, cfg)
+        except ValueError:
+            return []
+        return codigos[: self.max_itens_preview_pagina]
+
+    def _gerar_preview_documento(self, codigos, cfg: GeracaoConfig) -> Image.Image:
+        largura, altura = map(int, A4)
+        preview = Image.new("RGB", (largura, altura), "white")
+
+        x = int(20 * mm)
+        y = int(40 * mm)
+        tamanho = int(35 * mm)
+        margem = int(10 * mm)
+
+        x_cursor = x
+        y_cursor = y
+
+        for codigo in codigos:
+            img = self._gerar_imagem_obj(self._normalizar_dado(codigo, cfg), cfg)
+            img = img.resize((tamanho, tamanho))
+            preview.paste(img, (x_cursor, y_cursor))
+
+            x_cursor += tamanho + margem
+            if x_cursor + tamanho > largura - int(20 * mm):
+                x_cursor = x
+                y_cursor += tamanho + margem
+            if y_cursor + tamanho > altura - int(20 * mm):
+                break
+
+        return preview
+
     def atualizar_preview(self):
         cfg = self._build_config()
-        amostra = self._normalizar_dado("123456789", cfg)
         try:
-            img = self._gerar_imagem_obj(amostra, cfg)
-            img.thumbnail((260, 260))
+            codigos_preview = self._extrair_codigos_preview()
+            if codigos_preview:
+                img = self._gerar_preview_documento(codigos_preview, cfg)
+            else:
+                amostra = self._normalizar_dado("123456789", cfg)
+                img = self._gerar_imagem_obj(amostra, cfg)
+
+            img.thumbnail((420, 420))
             self.preview_image_ref = ImageTk.PhotoImage(img)
             self.preview_label.configure(image=self.preview_image_ref, text="")
             self._preview_backend_error_shown = False
@@ -394,6 +440,7 @@ class QRCodeGenerator:
                         self.generate_button.configure(state="normal")
                     else:
                         self.generate_button.configure(state="disabled")
+                    self.atualizar_preview()
                 elif msg["tipo"] == "carregamento_erro":
                     self.progress_bar.stop()
                     self.progress_frame.pack_forget()
