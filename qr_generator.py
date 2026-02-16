@@ -46,6 +46,7 @@ class QRCodeGenerator:
         self._preview_backend_error_shown = False
 
         self.qr_size = tk.IntVar(value=250)
+        self.barcode_size = tk.IntVar(value=520)
         self.qr_foreground_color = tk.StringVar(value="black")
         self.qr_background_color = tk.StringVar(value="white")
         self.modo = tk.StringVar(value="texto")
@@ -93,6 +94,16 @@ class QRCodeGenerator:
         )
         self.formato_combo.grid(row=0, column=4, padx=5, pady=5, sticky="w")
         self.formato_combo.set(self.formato_saida.get())
+
+        ttk.Label(topo, text="Tam. QR(px):").grid(row=0, column=5, sticky="e", padx=(20, 5))
+        self.qr_size_spin = ttk.Spinbox(topo, from_=80, to=1200, textvariable=self.qr_size, width=6, command=self.atualizar_preview)
+        self.qr_size_spin.grid(row=0, column=6, padx=5, pady=5, sticky="w")
+        self.qr_size_spin.bind("<FocusOut>", lambda _e: self.atualizar_preview())
+
+        ttk.Label(topo, text="Tam. Barra(px):").grid(row=0, column=7, sticky="e", padx=(20, 5))
+        self.barcode_size_spin = ttk.Spinbox(topo, from_=160, to=1600, textvariable=self.barcode_size, width=7, command=self.atualizar_preview)
+        self.barcode_size_spin.grid(row=0, column=8, padx=5, pady=5, sticky="w")
+        self.barcode_size_spin.bind("<FocusOut>", lambda _e: self.atualizar_preview())
 
         ttk.Label(topo, text="Tipo:").grid(row=1, column=0, sticky="w", padx=5)
         ttk.Radiobutton(
@@ -215,6 +226,7 @@ class QRCodeGenerator:
     def _build_config(self) -> GeracaoConfig:
         return GeracaoConfig(
             qr_size=int(self.qr_size.get()),
+            barcode_size=int(self.barcode_size.get()),
             foreground=self.qr_foreground_color.get(),
             background=self.qr_background_color.get(),
             tipo_codigo=self.tipo_codigo.get(),

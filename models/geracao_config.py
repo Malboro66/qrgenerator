@@ -4,6 +4,7 @@ from dataclasses import dataclass
 @dataclass
 class GeracaoConfig:
     qr_size: int
+    barcode_size: int
     foreground: str
     background: str
     tipo_codigo: str

@@ -78,7 +78,9 @@ class CodigoService:
         if len(codigos) > cfg.max_codigos_por_lote:
             raise ValueError(f'Limite excedido: máximo de {cfg.max_codigos_por_lote} códigos por geração.')
         if cfg.qr_size < 80 or cfg.qr_size > 1200:
-            raise ValueError('Tamanho inválido. Use um valor entre 80 e 1200 pixels.')
+            raise ValueError('Tamanho de QR inválido. Use um valor entre 80 e 1200 pixels.')
+        if cfg.barcode_size < 160 or cfg.barcode_size > 1600:
+            raise ValueError('Tamanho de código de barras inválido. Use um valor entre 160 e 1600 pixels.')
 
         validos = []
         invalidos = 0
@@ -97,7 +99,7 @@ class CodigoService:
         return validos, invalidos
 
     @staticmethod
-    def _gerar_barcode_pil(dado: str) -> Image.Image:
+    def _gerar_barcode_pil(dado: str, cfg: GeracaoConfig) -> Image.Image:
         # Backend principal: python-barcode + Pillow (não depende de renderPM).
         try:
             from barcode import Code128
@@ -118,7 +120,9 @@ class CodigoService:
                 },
             )
             buffer.seek(0)
-            return Image.open(buffer).convert('RGB')
+            img = Image.open(buffer).convert('RGB')
+            altura = max(80, int(cfg.barcode_size * 0.35))
+            return img.resize((cfg.barcode_size, altura))
         except (ModuleNotFoundError, ImportError):
             pass
         except Exception as exc:
@@ -134,7 +138,9 @@ class CodigoService:
             from reportlab.lib.units import mm
 
             desenho = createBarcodeDrawing('Code128', value=dado, barHeight=20 * mm, barWidth=0.45, humanReadable=True)
-            return renderPM.drawToPIL(desenho, dpi=200).convert('RGB')
+            img = renderPM.drawToPIL(desenho, dpi=200).convert('RGB')
+            altura = max(80, int(cfg.barcode_size * 0.35))
+            return img.resize((cfg.barcode_size, altura))
         except (ModuleNotFoundError, ImportError, RuntimeError, OSError) as exc:
             raise RuntimeError(
                 "Geração de código de barras indisponível: instale a dependência opcional 'python-barcode' "
@@ -144,7 +150,7 @@ class CodigoService:
     @staticmethod
     def gerar_imagem_obj(dado: str, cfg: GeracaoConfig) -> Image.Image:
         if cfg.tipo_codigo == 'barcode':
-            return CodigoService._gerar_barcode_pil(dado)
+            return CodigoService._gerar_barcode_pil(dado, cfg)
         qr = qrcode.QRCode(box_size=10, border=2)
         qr.add_data(dado)
         qr.make(fit=True)
@@ -153,4 +159,5 @@ class CodigoService:
             img = img.get_image()
         if not isinstance(img, Image.Image):
             img = Image.open(io.BytesIO(img.tobytes()))
-        return img.convert('RGB')
+        qr_img = img.convert('RGB')
+        return qr_img.resize((cfg.qr_size, cfg.qr_size))

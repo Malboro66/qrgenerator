@@ -15,7 +15,7 @@ A professional desktop application for generating and customizing QR codes **and
     - **PNG**: Export individual QR codes as high-quality PNG images.
     - **ZIP**: Create a ZIP archive containing all generated QR codes as PNG images.
 - **Advanced Customization**:
-    - **Size**: Adjust the size of the QR codes in pixels.
+    - **Size**: Adjust the size of QR codes and barcodes in pixels (independent controls).
     - **Colors**: Choose custom foreground and background colors.
     - **Logo Integration**: Add your own logo to the center of the QR codes.
 - **Generation Modes**:
