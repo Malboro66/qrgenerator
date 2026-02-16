@@ -29,6 +29,10 @@ class ItemCodigo:
     valor: str
 
 
+class OperacaoCancelada(Exception):
+    """Sinaliza cancelamento de operação longa."""
+
+
 class QRCodeGenerator:
     """Aplicativo desktop para geração de QR Codes e códigos de barras."""
 
@@ -44,6 +48,7 @@ class QRCodeGenerator:
         self.arquivo_fonte = ""
         self.preview_image_ref = None
         self._preview_backend_error_shown = False
+        self.cancelar_evento = threading.Event()
 
         self.qr_width_cm = tk.DoubleVar(value=4.0)
         self.qr_height_cm = tk.DoubleVar(value=4.0)
@@ -87,6 +92,14 @@ class QRCodeGenerator:
             command=self.gerar_a_partir_da_tabela,
         )
         self.generate_button.grid(row=0, column=2, padx=5, pady=5)
+
+        self.cancel_button = ttk.Button(
+            topo,
+            text="Cancelar",
+            state="disabled",
+            command=self.cancelar_operacao,
+        )
+        self.cancel_button.grid(row=0, column=13, padx=5, pady=5)
 
         ttk.Label(topo, text="Formato de saída:").grid(row=0, column=3, sticky="e", padx=(20, 5))
         self.formato_combo = ttk.Combobox(
@@ -186,6 +199,13 @@ class QRCodeGenerator:
         else:
             self.texto_controls.grid_forget()
             self.numerico_controls.grid(row=3, column=0, columnspan=3, sticky="w", padx=5, pady=3)
+
+    def cancelar_operacao(self):
+        if not self._geracao_em_andamento:
+            return
+        self.cancelar_evento.set()
+        self.progress_label_var.set("Cancelando operação...")
+        self.cancel_button.configure(state="disabled")
 
     def selecionar_arquivo(self):
         if self._carregamento_em_andamento or self._geracao_em_andamento:
@@ -335,6 +355,8 @@ class QRCodeGenerator:
 
             nomes_usados = set()
             for i, codigo in enumerate(codigos, start=1):
+                if self.cancelar_evento.is_set():
+                    raise OperacaoCancelada("Operação cancelada pelo usuário.")
                 dado = self._normalizar_dado(codigo, cfg)
                 nome_base = self._sanitizar_nome_arquivo(codigo, f"codigo_{i}")
                 nome_arquivo = nome_base
@@ -389,6 +411,8 @@ class QRCodeGenerator:
             total = len(codigos)
 
             for i, codigo in enumerate(codigos, start=1):
+                if self.cancelar_evento.is_set():
+                    raise OperacaoCancelada("Operação cancelada pelo usuário.")
                 imagem = self._gerar_imagem_obj(self._normalizar_dado(codigo, cfg), cfg)
                 buffer = io.BytesIO()
                 imagem.save(buffer, format="PNG")
@@ -416,6 +440,7 @@ class QRCodeGenerator:
 
     def _iniciar_progresso(self, total):
         self._geracao_em_andamento = True
+        self.cancelar_evento.clear()
         self.progress_bar.stop()
         self.progress_bar.configure(mode="determinate", maximum=max(total, 1))
         self.progress_bar["value"] = 0
@@ -423,13 +448,16 @@ class QRCodeGenerator:
         self.progress_frame.pack(fill="x")
         self.generate_button.configure(state="disabled")
         self.select_button.configure(state="disabled")
+        self.cancel_button.configure(state="normal")
 
     def _finalizar_progresso(self):
         self._geracao_em_andamento = False
         self._carregamento_em_andamento = False
+        self.cancelar_evento.clear()
         self.progress_bar.stop()
         self.progress_frame.pack_forget()
         self.select_button.configure(state="normal")
+        self.cancel_button.configure(state="disabled")
         if self.df is not None and self.column_combo.get():
             self.generate_button.configure(state="normal")
 
@@ -453,6 +481,9 @@ class QRCodeGenerator:
                     if detalhe:
                         erro_msg = f"{erro_msg}\n\nDetalhes técnicos:\n{detalhe}"
                     messagebox.showerror("Erro", erro_msg)
+                elif msg["tipo"] == "cancelado":
+                    self._finalizar_progresso()
+                    messagebox.showinfo("Cancelado", msg.get("msg", "Operação cancelada."))
                 elif msg["tipo"] == "carregamento_sucesso":
                     self.progress_bar.stop()
                     self.progress_frame.pack_forget()
@@ -489,6 +520,9 @@ class QRCodeGenerator:
                 self.gerar_zip(codigos, destino)
             else:
                 self.gerar_imagens(codigos, formato, destino)
+        except OperacaoCancelada as exc:
+            self.logger.info("Geração cancelada", extra={"event": "generate_cancel", "operation": formato, "path": str(destino)})
+            self.fila.put({"tipo": "cancelado", "msg": str(exc)})
         except Exception as exc:
             self.logger.exception("Falha na geração", extra={"event": "generate_error", "operation": formato, "path": str(destino), "erro": str(exc)})
             self.fila.put({"tipo": "erro", "msg": str(exc), "detalhe": traceback.format_exc(limit=3)})
