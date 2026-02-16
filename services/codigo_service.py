@@ -6,8 +6,11 @@ from PIL import Image
 
 from models.geracao_config import GeracaoConfig
 
+
 class CodigoService:
     """Camada de negócio para carga, validação e geração de códigos."""
+
+    DPI_PADRAO = 200
 
     @staticmethod
     def formatar_excecao(exc: Exception, contexto: str) -> str:
@@ -72,15 +75,41 @@ class CodigoService:
         return valor
 
     @staticmethod
+    def _cm_para_px(cm: float, dpi: int = DPI_PADRAO) -> int:
+        return max(1, int(round((cm / 2.54) * dpi)))
+
+    @staticmethod
+    def _resize_with_ratio(img: Image.Image, width_px: int, height_px: int, keep_ratio: bool) -> Image.Image:
+        width_px = max(1, width_px)
+        height_px = max(1, height_px)
+        if not keep_ratio:
+            return img.resize((width_px, height_px), Image.Resampling.LANCZOS)
+
+        base = img.copy()
+        base.thumbnail((width_px, height_px), Image.Resampling.LANCZOS)
+        canvas = Image.new('RGB', (width_px, height_px), 'white')
+        x = (width_px - base.width) // 2
+        y = (height_px - base.height) // 2
+        canvas.paste(base, (x, y))
+        return canvas
+
+    @staticmethod
     def validar_parametros_geracao(codigos, cfg: GeracaoConfig):
         if not isinstance(codigos, list) or not codigos:
             raise ValueError('Nenhum código válido foi encontrado para geração.')
         if len(codigos) > cfg.max_codigos_por_lote:
             raise ValueError(f'Limite excedido: máximo de {cfg.max_codigos_por_lote} códigos por geração.')
-        if cfg.qr_size < 80 or cfg.qr_size > 1200:
-            raise ValueError('Tamanho de QR inválido. Use um valor entre 80 e 1200 pixels.')
-        if cfg.barcode_size < 160 or cfg.barcode_size > 1600:
-            raise ValueError('Tamanho de código de barras inválido. Use um valor entre 160 e 1600 pixels.')
+
+        if cfg.qr_width_cm <= 0 or cfg.qr_height_cm <= 0:
+            raise ValueError('Tamanho de QR inválido. Informe largura/altura em cm maiores que zero.')
+        if cfg.barcode_width_cm <= 0 or cfg.barcode_height_cm <= 0:
+            raise ValueError('Tamanho de código de barras inválido. Informe largura/altura em cm maiores que zero.')
+
+        # limites práticos
+        if cfg.qr_width_cm > 30 or cfg.qr_height_cm > 30:
+            raise ValueError('Tamanho de QR inválido. Use valores até 30 cm.')
+        if cfg.barcode_width_cm > 40 or cfg.barcode_height_cm > 20:
+            raise ValueError('Tamanho de código de barras inválido. Use até 40x20 cm.')
 
         validos = []
         invalidos = 0
@@ -101,6 +130,8 @@ class CodigoService:
     @staticmethod
     def _gerar_barcode_pil(dado: str, cfg: GeracaoConfig) -> Image.Image:
         # Backend principal: python-barcode + Pillow (não depende de renderPM).
+        width_px = CodigoService._cm_para_px(cfg.barcode_width_cm)
+        height_px = CodigoService._cm_para_px(cfg.barcode_height_cm)
         try:
             from barcode import Code128
             from barcode.writer import ImageWriter
@@ -111,36 +142,31 @@ class CodigoService:
             codigo.write(
                 buffer,
                 options={
-                    "module_width": 0.25,
-                    "module_height": 18.0,
-                    "font_size": 10,
-                    "text_distance": 4,
-                    "quiet_zone": 2.0,
-                    "dpi": 200,
+                    'module_width': 0.25,
+                    'module_height': 18.0,
+                    'font_size': 10,
+                    'text_distance': 4,
+                    'quiet_zone': 2.0,
+                    'dpi': CodigoService.DPI_PADRAO,
                 },
             )
             buffer.seek(0)
             img = Image.open(buffer).convert('RGB')
-            altura = max(80, int(cfg.barcode_size * 0.35))
-            return img.resize((cfg.barcode_size, altura))
+            return CodigoService._resize_with_ratio(img, width_px, height_px, cfg.keep_barcode_ratio)
         except (ModuleNotFoundError, ImportError):
             pass
         except Exception as exc:
-            raise RuntimeError(
-                "Falha ao gerar barcode com python-barcode. Verifique os dados de entrada."
-            ) from exc
+            raise RuntimeError('Falha ao gerar barcode com python-barcode. Verifique os dados de entrada.') from exc
 
-        # Fallback opcional: renderPM (mantido por compatibilidade com ambientes legados).
+        # Fallback opcional: renderPM
         try:
             from reportlab.graphics import renderPM
             from reportlab.graphics.barcode import createBarcodeDrawing
-            from reportlab.graphics.utils import RenderPMError
             from reportlab.lib.units import mm
 
             desenho = createBarcodeDrawing('Code128', value=dado, barHeight=20 * mm, barWidth=0.45, humanReadable=True)
-            img = renderPM.drawToPIL(desenho, dpi=200).convert('RGB')
-            altura = max(80, int(cfg.barcode_size * 0.35))
-            return img.resize((cfg.barcode_size, altura))
+            img = renderPM.drawToPIL(desenho, dpi=CodigoService.DPI_PADRAO).convert('RGB')
+            return CodigoService._resize_with_ratio(img, width_px, height_px, cfg.keep_barcode_ratio)
         except (ModuleNotFoundError, ImportError, RuntimeError, OSError) as exc:
             raise RuntimeError(
                 "Geração de código de barras indisponível: instale a dependência opcional 'python-barcode' "
@@ -151,6 +177,7 @@ class CodigoService:
     def gerar_imagem_obj(dado: str, cfg: GeracaoConfig) -> Image.Image:
         if cfg.tipo_codigo == 'barcode':
             return CodigoService._gerar_barcode_pil(dado, cfg)
+
         qr = qrcode.QRCode(box_size=10, border=2)
         qr.add_data(dado)
         qr.make(fit=True)
@@ -159,5 +186,11 @@ class CodigoService:
             img = img.get_image()
         if not isinstance(img, Image.Image):
             img = Image.open(io.BytesIO(img.tobytes()))
+
         qr_img = img.convert('RGB')
-        return qr_img.resize((cfg.qr_size, cfg.qr_size))
+        return CodigoService._resize_with_ratio(
+            qr_img,
+            CodigoService._cm_para_px(cfg.qr_width_cm),
+            CodigoService._cm_para_px(cfg.qr_height_cm),
+            cfg.keep_qr_ratio,
+        )
