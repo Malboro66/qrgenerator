@@ -24,6 +24,8 @@ from tkinter import filedialog, messagebox, ttk
 
 from models.geracao_config import GeracaoConfig
 from services.codigo_service import CodigoService
+from services.job_run_store import JobRunStore
+from services.metrics_store import MetricsStore
 from logging_utils import setup_logging
 
 @dataclass
@@ -48,7 +50,8 @@ class QRCodeGenerator:
         self.fila = queue.Queue()
         self.logger = setup_logging()
         self.service = CodigoService()
-
+        self.job_store = JobRunStore()
+        self.metrics_store = MetricsStore()
         self.df = None
         self.arquivo_fonte = ""
         self.preview_image_ref = None
@@ -76,7 +79,8 @@ class QRCodeGenerator:
         self.max_tamanho_dado = 512
         self.max_itens_preview_pagina = 24
         self._inicio_geracao_ts = None
-
+        self._job_id_atual = ""
+        self._formato_execucao_atual = ""
         self._total_planejado = 0
         self._processados_atuais = 0
         self._invalidos_ultima_geracao = 0
@@ -109,7 +113,6 @@ class QRCodeGenerator:
             "Primary.TButton",
             foreground=[("disabled", "#f3f4f6"), ("!disabled", "white")],
             background=[("disabled", "#9ca3af"), ("!disabled", "#2563eb")],
-
         )
 
         self.style.configure("Secondary.TButton", padding=(12, 10), font=("Segoe UI", 10, "bold"))
@@ -125,6 +128,9 @@ class QRCodeGenerator:
             foreground=[("disabled", "#9ca3af"), ("!disabled", "white")],
             background=[("disabled", "#e5e7eb"), ("!disabled", "#dc2626")],
         )
+        self.formato_combo.grid(row=0, column=1, padx=self.space_sm, pady=self.space_sm, sticky="w")
+        self.formato_combo.set(self.formato_saida.get())
+        ttk.Label(config_frame, text="(SVG apenas para QR)", style="SectionHint.TLabel").grid(row=0, column=2, padx=(0, self.space_sm), sticky="w")
 
         self.style.configure("Muted.TLabel", foreground="#4b5563")
         self.style.configure("SectionHint.TLabel", foreground="#6b7280", font=("Segoe UI", 9))
@@ -373,6 +379,26 @@ class QRCodeGenerator:
         except Exception as exc:
             self.logger.exception("Falha ao finalizar job", extra={"event": "job_finish_error", "erro": str(exc), "operation": status})
 
+    def _registrar_metricas_execucao(self, status: str, erro: str = ""):
+        if self._inicio_geracao_ts is None:
+            return
+
+        duracao = max(0.0, time.perf_counter() - self._inicio_geracao_ts)
+        total_entradas = max(0, int(self._total_planejado) + int(self._invalidos_ultima_geracao))
+        formato = self._formato_execucao_atual or self.formato_saida.get()
+        try:
+            self.metrics_store.record_run(
+                formato=formato,
+                status=status,
+                total_entradas=total_entradas,
+                total_invalidos=self._invalidos_ultima_geracao,
+                total_processado=self._processados_atuais,
+                duracao_s=duracao,
+                erro=erro,
+            )
+        except Exception as exc:
+            self.logger.exception("Falha ao registrar métricas", extra={"event": "metrics_record_error", "erro": str(exc), "operation": status})
+
     def abrir_pasta_saida(self):
         caminho = self._ultimo_destino_saida
         if not caminho:
@@ -414,249 +440,6 @@ class QRCodeGenerator:
         self.cancelar_evento.set()
         self.progress_label_var.set("Cancelando operação...")
         self.cancel_button.configure(state="disabled", style="Secondary.TButton")
-
-    def _criar_interface(self):
-        conteudo = ttk.Frame(self.root, padding=self.space_md)
-        conteudo.pack(fill="x")
-
-        dados_frame = ttk.LabelFrame(conteudo, text="1) Entrada de dados", padding=self.space_md)
-        dados_frame.pack(fill="x", pady=(0, self.space_sm))
-
-        self.select_button = ttk.Button(dados_frame, text="1. Selecionar planilha", command=self.selecionar_arquivo)
-        self.select_button.grid(row=0, column=0, padx=self.space_sm, pady=self.space_sm, sticky="w")
-
-        ttk.Label(dados_frame, text="Coluna:").grid(row=0, column=1, padx=(self.space_md, self.space_sm), pady=self.space_sm, sticky="e")
-        self.column_combo = ttk.Combobox(dados_frame, state="disabled", width=35)
-        self.column_combo.grid(row=0, column=2, padx=self.space_sm, pady=self.space_sm, sticky="w")
-        self.column_combo.bind("<<ComboboxSelected>>", lambda _e: self.atualizar_preview())
-
-        config_frame = ttk.LabelFrame(conteudo, text="2) Configuração", padding=self.space_md)
-        config_frame.pack(fill="x", pady=(0, self.space_sm))
-
-        ttk.Label(config_frame, text="Formato de saída").grid(row=0, column=0, sticky="e", padx=(0, self.space_sm), pady=self.space_sm)
-        self.formato_combo = ttk.Combobox(
-            config_frame,
-            textvariable=self.formato_saida,
-            state="readonly",
-            width=8,
-            values=["pdf", "png", "zip", "svg"],
-        )
-        self.formato_combo.grid(row=0, column=1, padx=self.space_sm, pady=self.space_sm, sticky="w")
-        self.formato_combo.set(self.formato_saida.get())
-        ttk.Label(config_frame, text="(SVG apenas para QR)", style="SectionHint.TLabel").grid(row=0, column=2, padx=(0, self.space_sm), sticky="w")
-
-        ttk.Label(config_frame, text="QR (cm LxA):").grid(row=1, column=0, sticky="e", padx=(0, 5), pady=5)
-        self.qr_w_spin = ttk.Spinbox(config_frame, from_=1.0, to=30.0, increment=0.1, textvariable=self.qr_width_cm, width=5, command=self.atualizar_preview)
-        self.qr_w_spin.grid(row=1, column=1, padx=(0, 2), pady=5, sticky="w")
-        self.qr_h_spin = ttk.Spinbox(config_frame, from_=1.0, to=30.0, increment=0.1, textvariable=self.qr_height_cm, width=5, command=self.atualizar_preview)
-        self.qr_h_spin.grid(row=1, column=2, padx=(2, 5), pady=5, sticky="w")
-        ttk.Checkbutton(config_frame, text="Manter proporção QR", variable=self.keep_qr_ratio, command=self.atualizar_preview).grid(row=1, column=3, padx=5, pady=5, sticky="w")
-
-        ttk.Label(config_frame, text="Barra (cm LxA):").grid(row=2, column=0, sticky="e", padx=(0, 5), pady=5)
-        self.bar_w_spin = ttk.Spinbox(config_frame, from_=1.0, to=40.0, increment=0.1, textvariable=self.barcode_width_cm, width=5, command=self.atualizar_preview)
-        self.bar_w_spin.grid(row=2, column=1, padx=(0, 2), pady=5, sticky="w")
-        self.bar_h_spin = ttk.Spinbox(config_frame, from_=1.0, to=20.0, increment=0.1, textvariable=self.barcode_height_cm, width=5, command=self.atualizar_preview)
-        self.bar_h_spin.grid(row=2, column=2, padx=(2, 5), pady=5, sticky="w")
-        ttk.Checkbutton(config_frame, text="Manter proporção Barra", variable=self.keep_barcode_ratio, command=self.atualizar_preview).grid(row=2, column=3, padx=5, pady=5, sticky="w")
-
-        for spin in (self.qr_w_spin, self.qr_h_spin, self.bar_w_spin, self.bar_h_spin):
-            spin.bind("<FocusOut>", lambda _e: self.atualizar_preview())
-
-        ttk.Label(config_frame, text="Tipo:").grid(row=3, column=0, sticky="e", padx=(0, 5), pady=5)
-        ttk.Radiobutton(
-            config_frame,
-            text="QR Code",
-            variable=self.tipo_codigo,
-            value="qrcode",
-            command=self.atualizar_preview,
-        ).grid(row=3, column=1, sticky="w")
-        ttk.Radiobutton(
-            config_frame,
-            text="Código de Barras (Code128)",
-            variable=self.tipo_codigo,
-            value="barcode",
-            command=self.atualizar_preview,
-        ).grid(row=3, column=2, columnspan=2, sticky="w")
-
-        ttk.Label(config_frame, text="Modo de dados:").grid(row=4, column=0, sticky="e", padx=(0, 5), pady=5)
-        ttk.Radiobutton(
-            config_frame,
-            text="Texto",
-            variable=self.modo,
-            value="texto",
-            command=self.atualizar_controles_formato,
-        ).grid(row=4, column=1, sticky="w")
-        ttk.Radiobutton(
-            config_frame,
-            text="Numérico",
-            variable=self.modo,
-            value="numerico",
-            command=self.atualizar_controles_formato,
-        ).grid(row=4, column=2, sticky="w")
-
-        self.texto_controls = ttk.Frame(config_frame)
-        self.texto_controls.grid(row=5, column=0, columnspan=4, sticky="w", padx=5, pady=3)
-        ttk.Label(self.texto_controls, text="Dados conforme coluna selecionada.").pack(anchor="w")
-
-        self.numerico_controls = ttk.Frame(config_frame)
-        ttk.Label(self.numerico_controls, text="Prefixo:").pack(side="left", padx=(0, 5))
-        ttk.Entry(self.numerico_controls, textvariable=self.prefixo_numerico, width=10).pack(
-            side="left", padx=(0, 10)
-        )
-        ttk.Label(self.numerico_controls, text="Sufixo:").pack(side="left", padx=(0, 5))
-        ttk.Entry(self.numerico_controls, textvariable=self.sufixo_numerico, width=10).pack(side="left")
-
-        self.atualizar_controles_formato()
-
-        acao_status_frame = ttk.LabelFrame(conteudo, text="3) Ação + Status", padding=self.space_md)
-        acao_status_frame.pack(fill="x")
-
-        botoes_frame = ttk.Frame(acao_status_frame)
-        botoes_frame.pack(fill="x", pady=(0, self.space_sm))
-
-        self.generate_button = ttk.Button(
-            botoes_frame,
-            text="3. Gerar códigos",
-            state="disabled",
-            style="Primary.TButton",
-            command=self.gerar_a_partir_da_tabela,
-        )
-        self.generate_button.pack(side="left", padx=(0, self.space_sm))
-
-        self.cancel_button = ttk.Button(
-            botoes_frame,
-            text="Cancelar geração",
-            state="disabled",
-            style="Secondary.TButton",
-            command=self.cancelar_operacao,
-        )
-        self.cancel_button.pack(side="left")
-
-        self.status_resumo_var = tk.StringVar(value="Pronto para iniciar. Selecione um arquivo para continuar.")
-        ttk.Label(acao_status_frame, textvariable=self.status_resumo_var).pack(anchor="w")
-        ttk.Label(acao_status_frame, text="Dica: o botão principal fica ativo após carregar um arquivo e escolher a coluna.", style="Muted.TLabel").pack(anchor="w", pady=(2, 0))
-
-        preview_frame = ttk.LabelFrame(self.root, text="Pré-visualização", padding=self.space_md)
-        preview_frame.pack(fill="both", expand=True, padx=self.space_md, pady=self.space_md)
-
-        preview_toolbar = ttk.Frame(preview_frame)
-        preview_toolbar.pack(fill="x", pady=(0, self.space_sm))
-        ttk.Label(preview_toolbar, text="Zoom:").pack(side="left")
-        self.preview_zoom_combo = ttk.Combobox(
-            preview_toolbar,
-            textvariable=self.preview_zoom,
-            state="readonly",
-            width=6,
-            values=["75%", "100%", "125%"],
-        )
-        self.preview_zoom_combo.pack(side="left", padx=(self.space_sm, 0))
-        self.preview_zoom_combo.bind("<<ComboboxSelected>>", lambda _e: self.atualizar_preview())
-
-        self.preview_escala_var = tk.StringVar(value="Escala visual: 100%")
-        ttk.Label(preview_toolbar, textvariable=self.preview_escala_var, style="SectionHint.TLabel").pack(side="right")
-
-        self.preview_label = ttk.Label(preview_frame)
-        self.preview_label.pack(expand=True)
-
-        self.progress_frame = ttk.Frame(acao_status_frame, padding=(0, 4, 0, 0))
-        self.progress_frame.pack(fill="x")
-
-        self.progress_label_var = tk.StringVar(value="")
-        self.progress_label = ttk.Label(self.progress_frame, textvariable=self.progress_label_var)
-        self.progress_label.pack(anchor="w")
-
-        self.progress_bar = ttk.Progressbar(self.progress_frame, mode="determinate", maximum=100)
-        self.progress_bar.pack(fill="x", pady=(4, 0))
-        self.progress_frame.pack_forget()
-
-        self.resultado_frame = ttk.LabelFrame(self.root, text="Resumo da operação", padding=self.space_md)
-        self.resultado_frame.pack(fill="x", padx=self.space_md, pady=(0, self.space_md))
-
-        self.resumo_processado_var = tk.StringVar(value="Total processado: 0")
-        self.resumo_ignorados_var = tk.StringVar(value="Ignorados por validação: 0")
-        self.resumo_duracao_var = tk.StringVar(value="Duração: -")
-        self.resumo_caminho_var = tk.StringVar(value="Saída: -")
-
-        ttk.Label(self.resultado_frame, textvariable=self.resumo_processado_var).grid(row=0, column=0, sticky="w", padx=(0, 20), pady=2)
-        ttk.Label(self.resultado_frame, textvariable=self.resumo_ignorados_var).grid(row=0, column=1, sticky="w", padx=(0, 20), pady=2)
-        ttk.Label(self.resultado_frame, textvariable=self.resumo_duracao_var).grid(row=0, column=2, sticky="w", pady=2)
-
-        ttk.Label(self.resultado_frame, textvariable=self.resumo_caminho_var).grid(row=1, column=0, columnspan=2, sticky="w", pady=2)
-        self.abrir_pasta_button = ttk.Button(
-            self.resultado_frame,
-            text="Abrir pasta",
-            state="disabled",
-            command=self.abrir_pasta_saida,
-        )
-        self.abrir_pasta_button.grid(row=1, column=2, sticky="e", pady=2)
-        self.resultado_frame.columnconfigure(1, weight=1)
-
-    def _formatar_duracao(self, segundos: float | None) -> str:
-        if segundos is None:
-            return "-"
-        segundos = max(0, int(segundos))
-        minutos, seg = divmod(segundos, 60)
-        horas, minutos = divmod(minutos, 60)
-        if horas:
-            return f"{horas}h {minutos:02d}m {seg:02d}s"
-        if minutos:
-            return f"{minutos}m {seg:02d}s"
-        return f"{seg}s"
-
-    def _atualizar_resumo_painel(
-        self,
-        *,
-        processado: int | None = None,
-        ignorados: int | None = None,
-        duracao: float | None = None,
-        caminho: str | None = None,
-    ):
-        if processado is not None:
-            self.resumo_processado_var.set(f"Total processado: {processado}")
-        if ignorados is not None:
-            self.resumo_ignorados_var.set(f"Ignorados por validação: {ignorados}")
-        if duracao is not None:
-            self.resumo_duracao_var.set(f"Duração: {self._formatar_duracao(duracao)}")
-        if caminho is not None:
-            caminho_txt = caminho if caminho else "-"
-            self.resumo_caminho_var.set(f"Saída: {caminho_txt}")
-            self._ultimo_destino_saida = caminho if caminho else ""
-            self.abrir_pasta_button.configure(state="normal" if caminho else "disabled")
-
-    def abrir_pasta_saida(self):
-        caminho = self._ultimo_destino_saida
-        if not caminho:
-            return
-
-        pasta = caminho if os.path.isdir(caminho) else os.path.dirname(caminho)
-        if not pasta:
-            pasta = os.getcwd()
-
-        try:
-            if sys.platform.startswith("win"):
-                os.startfile(pasta)  # type: ignore[attr-defined]
-            elif sys.platform == "darwin":
-                subprocess.Popen(["open", pasta])
-            else:
-                subprocess.Popen(["xdg-open", pasta])
-        except Exception as exc:
-            messagebox.showerror("Erro", f"Não foi possível abrir a pasta de saída:\n{exc}")
-
-    def atualizar_controles_formato(self):
-        if self.modo.get() == "texto":
-            self.numerico_controls.grid_forget()
-            self.texto_controls.grid(row=5, column=0, columnspan=4, sticky="w", padx=5, pady=3)
-        else:
-            self.texto_controls.grid_forget()
-            self.numerico_controls.grid(row=5, column=0, columnspan=4, sticky="w", padx=5, pady=3)
-
-        # Compatibilidade para testes que checam winfo_ismapped com janela raiz oculta.
-        texto_visivel = self.modo.get() == "texto"
-        self.texto_controls.winfo_ismapped = lambda: 1 if texto_visivel else 0
-        self.numerico_controls.winfo_ismapped = lambda: 0 if texto_visivel else 1
-
-    def _modo_teste_sincrono(self) -> bool:
-        return "PYTEST_CURRENT_TEST" in os.environ or isinstance(getattr(self.root, "after", None), Mock)
 
     def selecionar_arquivo(self):
         if self._carregamento_em_andamento or self._geracao_em_andamento:
@@ -918,7 +701,6 @@ class QRCodeGenerator:
         except (OSError, ValueError, RuntimeError) as exc:
             raise RuntimeError(self._formatar_excecao(exc, "Erro ao gerar PDF")) from exc
 
-
     def _iniciar_progresso(self, total, invalidos=0, destino="", formato=""):
         self._geracao_em_andamento = True
         self.cancelar_evento.clear()
@@ -931,10 +713,9 @@ class QRCodeGenerator:
         self._total_planejado = total
         self._processados_atuais = 0
         self._invalidos_ultima_geracao = invalidos
-
         self._atualizar_resumo_painel(processado=0, ignorados=invalidos, duracao=0, caminho=destino, job_id="")
+        self._formato_execucao_atual = formato or self.formato_saida.get()
         self._registrar_job(formato=formato or self.formato_saida.get(), destino=str(destino), total_validos=total, invalidos=invalidos)
-
         self.progress_frame.pack(fill="x")
         self.generate_button.configure(state="disabled")
         self.select_button.configure(state="disabled")
@@ -980,12 +761,14 @@ class QRCodeGenerator:
                 elif msg["tipo"] == "sucesso":
                     self._atualizar_resumo_painel(caminho=msg.get("caminho", ""), processado=self._total_planejado)
                     self._processados_atuais = self._total_planejado
+                    self._registrar_metricas_execucao("completed")
                     self._finalizar_job("completed")
                     self._finalizar_progresso()
                     self.status_resumo_var.set(f"Concluído com sucesso. Saída: {msg.get('caminho', '')}")
                     messagebox.showinfo("Sucesso", f"Arquivo(s) gerado(s) em: {msg.get('caminho', '')}")
                 elif msg["tipo"] == "erro":
                     self._atualizar_resumo_painel(caminho=self._ultimo_destino_saida)
+                    self._registrar_metricas_execucao("error", erro=msg.get("msg", ""))
                     self._finalizar_job("error", erro=msg.get("msg", ""))
                     self._finalizar_progresso()
                     self.status_resumo_var.set("Falha durante a geração. Verifique os detalhes do erro.")
@@ -996,6 +779,7 @@ class QRCodeGenerator:
                     messagebox.showerror("Erro", erro_msg)
                 elif msg["tipo"] == "cancelado":
                     self._atualizar_resumo_painel(caminho=self._ultimo_destino_saida)
+                    self._registrar_metricas_execucao("cancelled", erro=msg.get("msg", ""))
                     self._finalizar_job("cancelled", erro=msg.get("msg", ""))
                     self._finalizar_progresso()
                     self.status_resumo_var.set("Operação cancelada pelo usuário.")
@@ -1012,7 +796,7 @@ class QRCodeGenerator:
                     self.status_resumo_var.set(
                         f"Arquivo carregado: {os.path.basename(self.arquivo_fonte)} ({len(colunas)} coluna(s))."
                     )
-                    self._atualizar_resumo_painel(processado=0, ignorados=0, caminho="")
+                    self._atualizar_resumo_painel(processado=0, ignorados=0, caminho="", job_id="")
                     if colunas:
                         self.column_combo.set(colunas[0])
                         self.generate_button.configure(state="normal")
@@ -1061,7 +845,7 @@ class QRCodeGenerator:
         try:
             cfg = self._build_config()
             codigos, invalidos = self._validar_parametros_geracao(codigos, cfg)
-        except ValueError as exc:     
+        except ValueError as exc:
             self.fila.put({"tipo": "erro", "msg": str(exc)})
             return
 
@@ -1077,7 +861,6 @@ class QRCodeGenerator:
             return
 
         self._iniciar_progresso(len(codigos), invalidos=invalidos, destino=str(destino), formato=formato)
-        self._iniciar_progresso(len(codigos), invalidos=invalidos, destino=str(destino))
         self._executar_geracao(codigos, formato, destino)
 
     def gerar_a_partir_da_tabela(self):
@@ -1119,7 +902,6 @@ class QRCodeGenerator:
 
         self.logger.info("Iniciando geração", extra={"event": "generate_start", "operation": formato, "path": str(destino), "total": len(codigos)})
         self._iniciar_progresso(len(codigos), invalidos=invalidos, destino=str(destino), formato=formato)
-        self._iniciar_progresso(len(codigos), invalidos=invalidos, destino=str(destino))
         worker = threading.Thread(target=self._executar_geracao, args=(codigos, formato, destino), daemon=True)
         worker.start()
 
