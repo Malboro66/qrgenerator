@@ -1,4 +1,3 @@
-
 import io
 import logging
 import os
@@ -842,9 +841,14 @@ class QRCodeGenerator:
             largura_pagina, altura_pagina = A4
 
             x = 20 * mm
-            y = altura_pagina - 40 * mm
-            tamanho = 35 * mm
+            y = altura_pagina - 20 * mm
+            largura_item = cfg.qr_width_cm * 10 * mm
+            altura_item = cfg.qr_height_cm * 10 * mm
+            if cfg.tipo_codigo == "barcode":
+                largura_item = cfg.barcode_width_cm * 10 * mm
+                altura_item = cfg.barcode_height_cm * 10 * mm
             margem = 10 * mm
+            y -= altura_item
             total = len(codigos)
 
             for i, codigo in enumerate(codigos, start=1):
@@ -856,18 +860,18 @@ class QRCodeGenerator:
                 buffer.seek(0)
                 image_reader = ImageReader(buffer)
 
-                pdf.drawImage(image_reader, x, y, width=tamanho, height=tamanho, preserveAspectRatio=True)
+                pdf.drawImage(image_reader, x, y, width=largura_item, height=altura_item, preserveAspectRatio=True)
                 self.fila.put({"tipo": "progresso", "atual": i, "total": total, "codigo": codigo})
 
-                x += tamanho + margem
-                if x + tamanho > largura_pagina - 20 * mm:
+                x += largura_item + margem
+                if x + largura_item > largura_pagina - 20 * mm:
                     x = 20 * mm
-                    y -= tamanho + margem
+                    y -= altura_item + margem
 
                 if y < 20 * mm:
                     pdf.showPage()
                     x = 20 * mm
-                    y = altura_pagina - 40 * mm
+                    y = altura_pagina - 20 * mm - altura_item
 
             pdf.save()
             self.logger.info("PDF gerado com sucesso", extra={"event": "generate_done", "operation": "pdf", "path": caminho_pdf, "total": total})
