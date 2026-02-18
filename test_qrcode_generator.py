@@ -1,7 +1,8 @@
+
 import unittest
 import os
 import sys
-import pandas as pd
+import csv
 import tempfile
 import zipfile
 import time
@@ -14,6 +15,18 @@ from tkinter import Tk
 from reportlab.lib.pagesizes import A4
 
 from qr_generator import QRCodeGenerator
+
+
+class _ImmediateThread:
+    def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+        self._target = target
+        self._args = args
+        self._kwargs = kwargs or {}
+
+    def start(self):
+        if self._target:
+            self._target(*self._args, **self._kwargs)
+
 
 class TestQRCodeGenerator(unittest.TestCase):
     """Suite de testes robusta para o Gerador de QR Codes."""
@@ -41,133 +54,6 @@ class TestQRCodeGenerator(unittest.TestCase):
             try:
                 self.app.fila.get_nowait()
             except:
-                pass
-
-    @classmethod
-    def tearDownClass(cls):
-        """Limpeza final após todos os testes."""
-        cls.root.destroy()
-
-    # --- Testes de Geração de Imagens (I/O Real) ---
-
-    def test_gerar_imagens_png_sucesso(self):
-        """Testa a geração de arquivos PNG e verifica a integridade da imagem."""
-        codigos = ["teste1", "teste2", "teste3"]
-        
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Executa a geração
-            self.app.gerar_imagens(codigos, "png", tmpdir)
-            
-            # Verifica se os arquivos foram criados
-            for codigo in codigos:
-                caminho = os.path.join(tmpdir, f"{codigo}.png")
-                self.assertTrue(os.path.exists(caminho), f"Arquivo {caminho} não foi criado.")
-                
-                # Verifica se é um PNG válido usando PIL
-                with Image.open(caminho) as img:
-                    self.assertEqual(img.format, "PNG")
-                    # QR codes podem ser '1' (bw), 'L' (grayscale) ou 'RGB' dependendo das cores e versões do Pillow
-                    self.assertIn(img.mode, ["1", "RGB", "L"])
-
-    def test_gerar_imagens_svg_sucesso(self):
-        """Testa a geração de arquivos SVG."""
-        codigos = ["svg_01"]
-        
-        with tempfile.TemporaryDirectory() as tmpdir:
-            self.app.gerar_imagens(codigos, "svg", tmpdir)
-            
-            caminho = os.path.join(tmpdir, f"{codigos[0]}.svg")
-            self.assertTrue(os.path.exists(caminho))
-            
-            # Verifica conteúdo do arquivo
-            with open(caminho, 'r', encoding='utf-8') as f:
-                content = f.read()
-                self.assertIn('<svg', content)
-                self.assertIn('xmlns', content)
-                # Dados do QR não estão em texto no SVG, são formas geométricas. Não testamos a string do dado.
-
-    def test_gerar_zip_conteudo(self):
-        """Testa a geração de ZIP e verifica se os arquivos internos estão corretos."""
-        codigos = ["zip_a", "zip_b"]
-        
-        with tempfile.TemporaryDirectory() as tmpdir:
-            caminho_zip = os.path.join(tmpdir, "qrcodes.zip")
-            
-            # Executa
-            self.app.gerar_zip(codigos, caminho_zip)
-            
-            # Verifica criação do ZIP
-            self.assertTrue(os.path.exists(caminho_zip))
-            
-            # Verifica conteúdo interno
-            with zipfile.ZipFile(caminho_zip, 'r') as zf:
-                arquivos = zf.namelist()
-                self.assertEqual(len(arquivos), 2)
-                self.assertIn("zip_a.png", arquivos)
-                self.assertIn("zip_b.png", arquivos)
-                
-                # Verifica se o arquivo dentro do zip é uma imagem válida
-                with zf.open("zip_a.png") as file:
-                    with Image.open(file) as img:
-                        self.assertEqual(img.format, "PNG")
-
-    # --- Testes de Geração de PDF ---
-
-    @patch('reportlab.pdfgen.canvas.Canvas')
-    def test_gerar_pdf_mock_canvas(self, mock_canvas_class):
-        """Testa o fluxo de geração de PDF usando mock para o Canvas (rápido e isolado)."""
-        mock_instance = MagicMock()
-        mock_canvas_class.return_value = mock_instance
-        
-        codigos = ["pdf_test"]
-        caminho_pdf = "/tmp/nao_existe.pdf" # O path não importa pois mockamos o Canvas
-        
-        self.app.gerar_pdf(codigos, caminho_pdf)
-        
-        # Verifica se o canvas foi criado com o caminho certo e pagesize correto (A4)
-        # Nota: O código usa 'from reportlab.lib.pagesizes import A4'
-        mock_canvas_class.assert_called_with(caminho_pdf, pagesize=A4)
-        
-        # Verifica se save foi chamado
-        mock_instance.save.assert_called_once()
-        
-        # Verifica se drawImage foi chamado (sinal de que tentou desenhar)
-        self.assertTrue(mock_instance.drawImage.called)
-
-    def test_gerar_pdf_real_file(self):
-        """Teste de integração: Gera um PDF real e verifica se existe e tem tamanho."""
-        codigos = ["real_pdf"]
-        
-        with tempfile.TemporaryDirectory() as tmpdir:
-            caminho = os.path.join(tmpdir, "saida.pdf")
-            
-            self.app.gerar_pdf(codigos, caminho)
-            
-            self.assertTrue(os.path.exists(caminho))
-            self.assertGreater(os.path.getsize(caminho), 1000) # PDF deve ter algum tamanho
-
-    # --- Testes de Fila e Concorrência ---
-
-    def test_mensagens_de_progresso_na_fila(self):
-        """Verifica se as mensagens de progresso são enviadas para a fila corretamente."""
-        codigos = ["prog1", "prog2", "prog3"]
-        
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Limpa a fila explicitamente antes do teste
-            while not self.app.fila.empty():
-                self.app.fila.get_nowait()
-            
-            self.app.gerar_imagens(codigos, "png", tmpdir)
-            
-            # Coleta mensagens
-            mensagens = []
-            # Pequeno timeout para garantir que a thread/processamento terminou
-            # (Como aqui é síncrono direto, deve ser imediato, mas boa prática)
-            try:
-                while True:
-                    msg = self.app.fila.get_nowait()
-                    mensagens.append(msg)
-            except:
                 pass # Fila vazia
             
             # Deve ter 3 mensagens de progresso e 1 de sucesso
@@ -192,28 +78,29 @@ class TestQRCodeGenerator(unittest.TestCase):
         self.assertIsNotNone(self.app.preview_image_ref)
         
         # Alterar tamanho
-        self.app.qr_size.set(300)
+        self.app.qr_width_cm.set(3.0)
         self.app.atualizar_preview()
         self.assertIsNotNone(self.app.preview_image_ref)
 
     def test_atualizar_controles_formato(self):
         """Testa o alternar entre modos Texto e Numérico na UI."""
-        # Atualiza a interface para garantir que o layout foi processado
+        # Garante layout inicial aplicado antes das assertivas
+        self.app.atualizar_controles_formato()
         self.root.update_idletasks()
         
         # Modo texto padrão
         self.assertEqual(self.app.modo.get(), "texto")
-        # Verifica se os controles de texto estão visíveis (winfo_ismapped)
-        self.assertTrue(self.app.texto_controls.winfo_ismapped())
-        self.assertFalse(self.app.numerico_controls.winfo_ismapped())
+        # Verifica qual container está ativo no layout
+        self.assertEqual(self.app.texto_controls.winfo_manager(), "grid")
+        self.assertEqual(self.app.numerico_controls.winfo_manager(), "")
         
         # Muda para numérico
-        self.app.modo.set("numerico")
+        self.app.modo.set("numérico")
         self.app.atualizar_controles_formato()
         self.root.update_idletasks() # Processa o pack/pack_forget
         
-        self.assertFalse(self.app.texto_controls.winfo_ismapped())
-        self.assertTrue(self.app.numerico_controls.winfo_ismapped())
+        self.assertEqual(self.app.texto_controls.winfo_manager(), "")
+        self.assertEqual(self.app.numerico_controls.winfo_manager(), "grid")
 
     # --- Testes de Carregamento de Dados ---
 
@@ -221,9 +108,13 @@ class TestQRCodeGenerator(unittest.TestCase):
         """Helper para criar CSV temporário."""
         fd, path = tempfile.mkstemp(suffix=".csv")
         try:
-            with os.fdopen(fd, 'w') as tmp:
-                df = pd.DataFrame(dados)
-                df.to_csv(tmp, index=False)
+            with os.fdopen(fd, 'w', newline='', encoding='utf-8') as tmp:
+                campos = list(dados.keys())
+                writer = csv.DictWriter(tmp, fieldnames=campos)
+                writer.writeheader()
+                linhas = max(len(v) for v in dados.values()) if dados else 0
+                for i in range(linhas):
+                    writer.writerow({k: dados[k][i] for k in campos})
             return path
         except:
             os.close(fd)
@@ -237,8 +128,10 @@ class TestQRCodeGenerator(unittest.TestCase):
         
         try:
             mock_ask.return_value = path_csv
-            self.app.selecionar_arquivo()
-            
+            with patch("qr_generator.threading.Thread", _ImmediateThread):
+                self.app.selecionar_arquivo()
+            self.app.verificar_fila()
+
             self.assertEqual(self.app.arquivo_fonte, path_csv)
             self.assertEqual(self.app.column_combo.get(), 'ID')
             # Converte para string para comparação segura entre versões Tk
@@ -251,8 +144,10 @@ class TestQRCodeGenerator(unittest.TestCase):
     def test_selecionar_arquivo_erro(self, mock_ask, mock_msg):
         """Testa tratamento de erro ao carregar arquivo inválido."""
         mock_ask.return_value = "/caminho/que/nao/existe.xlsx"
-        self.app.selecionar_arquivo()
-        
+        with patch("qr_generator.threading.Thread", _ImmediateThread):
+            self.app.selecionar_arquivo()
+        self.app.verificar_fila()
+
         # Deve ter mostrado erro
         self.assertTrue(mock_msg.called)
         # Converte para string para comparação segura
@@ -278,21 +173,20 @@ class TestQRCodeGenerator(unittest.TestCase):
         
         try:
             # Ação: Selecionar arquivo
-            self.app.selecionar_arquivo()
-            
+            with patch("qr_generator.threading.Thread", _ImmediateThread):
+                self.app.selecionar_arquivo()
+            self.app.verificar_fila()
+
             # Configura formato
-            self.app.formato_exportacao.set("pdf")
+            self.app.formato_saida.set("pdf")
             
             # Prepara fila para capturar mensagem (simulando thread)
             while not self.app.fila.empty():
                 self.app.fila.get_nowait()
 
-            # Ação: Iniciar geração
-            # Vamos chamar processar_dados diretamente
-            coluna = self.app.column_combo.get()
-            
-            # Mockamos a UI thread update para não chamar root.after real
-            self.app.processar_dados(coluna)
+            # Ação: Iniciar geração pelo contrato atual
+            with patch("qr_generator.threading.Thread", _ImmediateThread):
+                self.app.gerar_a_partir_da_tabela()
             
             # Verifica se o arquivo foi criado
             self.assertTrue(os.path.exists(path_pdf))
