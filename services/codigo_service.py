@@ -167,7 +167,7 @@ class CodigoService:
             desenho = createBarcodeDrawing('Code128', value=dado, barHeight=20 * mm, barWidth=0.45, humanReadable=True)
             img = renderPM.drawToPIL(desenho, dpi=CodigoService.DPI_PADRAO).convert('RGB')
             return CodigoService._resize_with_ratio(img, width_px, height_px, cfg.keep_barcode_ratio)
-        except (ModuleNotFoundError, ImportError, RuntimeError, OSError) as exc:
+        except Exception as exc:
             raise RuntimeError(
                 "Geração de código de barras indisponível: instale a dependência opcional 'python-barcode' "
                 "(recomendado) ou habilite o backend renderPM do ReportLab."

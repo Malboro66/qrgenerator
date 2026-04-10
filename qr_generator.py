@@ -1,4 +1,5 @@
 import io
+import json
 import logging
 import os
 import queue
@@ -15,10 +16,6 @@ from enum import Enum, auto
 import qrcode
 from PIL import Image, ImageDraw, ImageTk
 from qrcode.image.svg import SvgImage
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.units import mm
-from reportlab.lib.utils import ImageReader
-from reportlab.pdfgen import canvas
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -28,6 +25,24 @@ from services.codigo_service import CodigoService
 from services.job_run_store import JobRunStore
 from services.metrics_store import MetricsStore
 from logging_utils import setup_logging
+
+# Equivalentes do ReportLab para evitar dependência em tempo de import.
+MM_TO_POINTS = 72 / 25.4
+mm = MM_TO_POINTS
+A4 = (210 * mm, 297 * mm)
+
+
+def _obter_modulos_pdf_reportlab():
+    try:
+        from reportlab.lib.utils import ImageReader
+        from reportlab.pdfgen import canvas as pdf_canvas
+        return pdf_canvas, ImageReader
+    except ImportError as exc:
+        raise RuntimeError(
+            "Exportação PDF requer a dependência opcional 'reportlab'. "
+            "Instale com: pip install reportlab"
+        ) from exc
+
 
 @dataclass
 class ItemCodigo:
@@ -86,6 +101,9 @@ class QRCodeGenerator:
         self.preview_preset = tk.StringVar(value="A4")
         self.preview_margin_cm = tk.DoubleVar(value=2.0)
         self.preview_spacing_cm = tk.DoubleVar(value=1.0)
+        self.impressora_var = tk.StringVar(value="")
+        self.copias_impressao = tk.IntVar(value=1)
+        self.impressora_status_var = tk.StringVar(value="")
 
         self.prefixo_numerico = tk.StringVar(value="")
         self.sufixo_numerico = tk.StringVar(value="")
@@ -99,15 +117,16 @@ class QRCodeGenerator:
         self._processados_atuais = 0
         self._invalidos_ultima_geracao = 0
         self._ultimo_destino_saida = ""
+        self._arquivos_temporarios_impressao = []
         self.space_sm = 8
         self.space_md = 12
         self.space_lg = 16
         self.etapa_atual = 1
+        self.estado_atual = EstadoAplicacao.IDLE
 
         self._configurar_estilos()
         self._criar_interface()
         self.atualizar_preview()
-        self.estado_atual = EstadoAplicacao.IDLE
         self._aplicar_estado_ui()
         self.root.after(100, self.verificar_fila)
 
@@ -207,7 +226,9 @@ class QRCodeGenerator:
         )
         self.formato_combo.grid(row=0, column=1, padx=self.space_sm, pady=self.space_sm, sticky="w")
         self.formato_combo.set(self.formato_saida.get())
+        self.formato_combo.bind("<<ComboboxSelected>>", self._ao_alterar_formato_saida)
         ttk.Label(self.config_frame, text="(SVG apenas para QR)", style="SectionHint.TLabel").grid(row=0, column=2, padx=(0, self.space_sm), sticky="w")
+        self.formato_combo.configure(values=["pdf", "png", "zip", "svg", "imprimir"])
 
         ttk.Label(self.config_frame, text="QR (cm LxA):").grid(row=1, column=0, sticky="e", padx=(0, 5), pady=5)
         self.qr_w_spin = ttk.Spinbox(self.config_frame, from_=1.0, to=30.0, increment=0.1, textvariable=self.qr_width_cm, width=5, command=self.atualizar_preview, style="App.TSpinbox")
@@ -272,6 +293,43 @@ class QRCodeGenerator:
 
         self.atualizar_controles_formato()
 
+        self.impressao_frame = ttk.LabelFrame(self.config_frame, text="Configuração de impressão", padding=self.space_sm)
+        self.impressao_frame.grid(row=6, column=0, columnspan=4, sticky="ew", padx=5, pady=(self.space_sm, 0))
+        ttk.Label(self.impressao_frame, text="Impressora:").grid(row=0, column=0, sticky="e", padx=(0, self.space_sm), pady=4)
+        self.impressora_combo = ttk.Combobox(
+            self.impressao_frame,
+            textvariable=self.impressora_var,
+            state="readonly",
+            width=38,
+            style="App.TCombobox",
+            values=[],
+        )
+        self.impressora_combo.grid(row=0, column=1, sticky="w", pady=4)
+        ttk.Button(
+            self.impressao_frame,
+            text="Atualizar",
+            style="Secondary.TButton",
+            command=lambda: self.atualizar_lista_impressoras(notificar=True),
+        ).grid(row=0, column=2, padx=(self.space_sm, 0), pady=4, sticky="w")
+
+        ttk.Label(self.impressao_frame, text="Cópias:").grid(row=1, column=0, sticky="e", padx=(0, self.space_sm), pady=4)
+        self.copias_spin = ttk.Spinbox(
+            self.impressao_frame,
+            from_=1,
+            to=50,
+            increment=1,
+            textvariable=self.copias_impressao,
+            width=6,
+            style="App.TSpinbox",
+        )
+        self.copias_spin.grid(row=1, column=1, sticky="w", pady=4)
+        ttk.Label(self.impressao_frame, textvariable=self.impressora_status_var, style="SectionHint.TLabel").grid(
+            row=2, column=0, columnspan=3, sticky="w", pady=(2, 0)
+        )
+        self.impressao_frame.columnconfigure(1, weight=1)
+        self.atualizar_lista_impressoras()
+        self._atualizar_controles_impressao()
+
         self.acao_status_frame = ttk.LabelFrame(conteudo, text="3) Ação + Status", padding=self.space_md)
         self.acao_status_frame.pack(fill="x")
 
@@ -286,6 +344,15 @@ class QRCodeGenerator:
             command=self.gerar_a_partir_da_tabela,
         )
         self.generate_button.pack(side="left", padx=(0, self.space_sm))
+
+        self.test_print_button = ttk.Button(
+            botoes_frame,
+            text="Imprimir teste (1 código)",
+            state="disabled",
+            style="Secondary.TButton",
+            command=self.imprimir_teste,
+        )
+        self.test_print_button.pack(side="left", padx=(0, self.space_sm))
 
         self.cancel_button = ttk.Button(
             botoes_frame,
@@ -442,6 +509,93 @@ class QRCodeGenerator:
         self.atualizar_preview()
         self._atualizar_stepper_visual()
 
+    def _ao_alterar_formato_saida(self, _e=None):
+        self._atualizar_controles_impressao()
+        self._aplicar_estado_ui()
+
+    def _listar_impressoras_windows(self):
+        if not sys.platform.startswith("win"):
+            return [], ""
+        comando = (
+            "Get-CimInstance Win32_Printer | "
+            "Select-Object Name,Default | "
+            "ConvertTo-Json -Compress"
+        )
+        saida = subprocess.check_output(
+            ["powershell", "-NoProfile", "-Command", comando],
+            stderr=subprocess.STDOUT,
+            timeout=10,
+            text=True,
+        ).strip()
+        if not saida:
+            return [], ""
+
+        dados = json.loads(saida)
+        if isinstance(dados, dict):
+            dados = [dados]
+
+        impressoras = []
+        padrao = ""
+        for item in dados:
+            nome = str(item.get("Name", "")).strip()
+            if not nome:
+                continue
+            impressoras.append(nome)
+            if bool(item.get("Default")):
+                padrao = nome
+
+        impressoras = sorted(set(impressoras), key=lambda nome: nome.lower())
+        return impressoras, padrao
+
+    def atualizar_lista_impressoras(self, notificar=False):
+        if not sys.platform.startswith("win"):
+            self.impressora_combo.configure(state="disabled", values=[])
+            self.impressora_status_var.set("Impressão integrada disponível apenas no Windows.")
+            return
+        try:
+            impressoras, padrao = self._listar_impressoras_windows()
+        except Exception as exc:
+            self.impressora_combo.configure(state="disabled", values=[])
+            self.impressora_status_var.set("Não foi possível consultar as impressoras instaladas.")
+            if notificar:
+                messagebox.showerror("Impressão", f"Erro ao listar impressoras:\n{exc}")
+            return
+
+        self.impressora_combo.configure(values=impressoras)
+        if impressoras:
+            atual = self.impressora_var.get().strip()
+            selecionada = atual if atual in impressoras else (padrao or impressoras[0])
+            self.impressora_var.set(selecionada)
+            self.impressora_combo.configure(state="readonly")
+            self.impressora_status_var.set(
+                f"{len(impressoras)} impressora(s) encontrada(s). Padrão: {padrao or 'não definida'}."
+            )
+            if notificar:
+                messagebox.showinfo("Impressão", "Lista de impressoras atualizada.")
+        else:
+            self.impressora_var.set("")
+            self.impressora_combo.configure(state="disabled")
+            self.impressora_status_var.set("Nenhuma impressora disponível no sistema.")
+            if notificar:
+                messagebox.showwarning("Impressão", "Nenhuma impressora foi encontrada.")
+
+    def _atualizar_controles_impressao(self):
+        formato_impressao = self.formato_saida.get() == "imprimir"
+        bloqueado = self.estado_atual in {EstadoAplicacao.LOADING, EstadoAplicacao.GENERATING, EstadoAplicacao.CANCELLING}
+        if formato_impressao:
+            self.impressao_frame.grid()
+        else:
+            self.impressao_frame.grid_remove()
+
+        if not formato_impressao:
+            return
+
+        self.copias_spin.configure(state="disabled" if bloqueado else "normal")
+        if not bloqueado and bool(self.impressora_combo.cget("values")):
+            self.impressora_combo.configure(state="readonly")
+        elif bloqueado:
+            self.impressora_combo.configure(state="disabled")
+
     def _formatar_duracao(self, segundos: float | None) -> str:
         if segundos is None:
             return "-"
@@ -473,7 +627,8 @@ class QRCodeGenerator:
             caminho_txt = caminho if caminho else "-"
             self.resumo_caminho_var.set(f"Saída: {caminho_txt}")
             self._ultimo_destino_saida = caminho if caminho else ""
-            self.abrir_pasta_button.configure(state="normal" if caminho else "disabled")
+            caminho_abrivel = bool(caminho and not str(caminho).startswith("impressora:"))
+            self.abrir_pasta_button.configure(state="normal" if caminho_abrivel else "disabled")
         if job_id is not None:
             self.resumo_job_var.set(f"Job ID: {job_id if job_id else '-'}")
 
@@ -563,9 +718,11 @@ class QRCodeGenerator:
         bloqueado = self.estado_atual in {EstadoAplicacao.LOADING, EstadoAplicacao.GENERATING, EstadoAplicacao.CANCELLING}
         pode_cancelar = self.estado_atual in {EstadoAplicacao.GENERATING, EstadoAplicacao.CANCELLING}
         pode_gerar = (not bloqueado) and self.df is not None and bool(self.column_combo.get())
+        pode_teste_impressao = pode_gerar and self.formato_saida.get() == "imprimir"
 
         self.select_button.configure(state="disabled" if bloqueado else "normal")
         self.generate_button.configure(state="normal" if pode_gerar else "disabled")
+        self.test_print_button.configure(state="normal" if pode_teste_impressao else "disabled")
         self.cancel_button.configure(
             state="normal" if pode_cancelar else "disabled",
             style="Danger.TButton" if pode_cancelar else "Secondary.TButton",
@@ -576,6 +733,7 @@ class QRCodeGenerator:
         else:
             self.column_combo.configure(state="disabled")
 
+        self._atualizar_controles_impressao()
         self._atualizar_stepper_visual()
 
     def cancelar_operacao(self):
@@ -782,6 +940,15 @@ class QRCodeGenerator:
             if not self._preview_backend_error_shown:
                 messagebox.showwarning("Dependência opcional ausente", str(exc))
                 self._preview_backend_error_shown = True
+        except Exception as exc:
+            self.preview_label.configure(image="", text="Falha ao gerar pré-visualização")
+            self.logger.exception(
+                "Erro inesperado no preview",
+                extra={"event": "preview_error", "operation": "preview", "erro": str(exc)},
+            )
+            if not self._preview_backend_error_shown:
+                messagebox.showwarning("Pré-visualização", f"Não foi possível atualizar o preview:\n{exc}")
+                self._preview_backend_error_shown = True
 
     def gerar_imagens(self, codigos, formato, destino, emitir_sucesso=True):
         try:
@@ -834,10 +1001,11 @@ class QRCodeGenerator:
         except (OSError, zipfile.BadZipFile, RuntimeError) as exc:
             raise RuntimeError(self._formatar_excecao(exc, "Erro ao gerar ZIP")) from exc
 
-    def gerar_pdf(self, codigos, caminho_pdf):
+    def gerar_pdf(self, codigos, caminho_pdf, emitir_sucesso=True):
         try:
             cfg = self._build_config()
-            pdf = canvas.Canvas(caminho_pdf, pagesize=A4)
+            pdf_canvas, image_reader_cls = _obter_modulos_pdf_reportlab()
+            pdf = pdf_canvas.Canvas(caminho_pdf, pagesize=A4)
             largura_pagina, altura_pagina = A4
 
             x = 20 * mm
@@ -858,7 +1026,7 @@ class QRCodeGenerator:
                 buffer = io.BytesIO()
                 imagem.save(buffer, format="PNG")
                 buffer.seek(0)
-                image_reader = ImageReader(buffer)
+                image_reader = image_reader_cls(buffer)
 
                 pdf.drawImage(image_reader, x, y, width=largura_item, height=altura_item, preserveAspectRatio=True)
                 self.fila.put({"tipo": "progresso", "atual": i, "total": total, "codigo": codigo})
@@ -874,10 +1042,67 @@ class QRCodeGenerator:
                     y = altura_pagina - 20 * mm - altura_item
 
             pdf.save()
-            self.logger.info("PDF gerado com sucesso", extra={"event": "generate_done", "operation": "pdf", "path": caminho_pdf, "total": total})
-            self.fila.put({"tipo": "sucesso", "caminho": caminho_pdf})
+            if emitir_sucesso:
+                self.logger.info("PDF gerado com sucesso", extra={"event": "generate_done", "operation": "pdf", "path": caminho_pdf, "total": total})
+                self.fila.put({"tipo": "sucesso", "caminho": caminho_pdf})
         except (OSError, ValueError, RuntimeError) as exc:
             raise RuntimeError(self._formatar_excecao(exc, "Erro ao gerar PDF")) from exc
+
+    def imprimir_codigos(self, codigos):
+        if not sys.platform.startswith("win"):
+            raise RuntimeError("A impressão integrada está disponível apenas no Windows.")
+
+        try:
+            copias = max(1, int(self.copias_impressao.get()))
+        except Exception as exc:
+            raise RuntimeError("Quantidade de cópias inválida.") from exc
+
+        impressora = self.impressora_var.get().strip()
+        pasta_tmp = tempfile.mkdtemp(prefix="qr_print_")
+        self._arquivos_temporarios_impressao.append(pasta_tmp)
+        self.gerar_imagens(codigos, "png", pasta_tmp, emitir_sucesso=False)
+
+        arquivos_png = [
+            os.path.join(pasta_tmp, nome)
+            for nome in sorted(os.listdir(pasta_tmp))
+            if nome.lower().endswith(".png")
+        ]
+        if not arquivos_png:
+            raise RuntimeError("Nenhum arquivo foi gerado para impressão.")
+
+        for _ in range(copias):
+            for caminho_imagem in arquivos_png:
+                if self.cancelar_evento.is_set():
+                    raise OperacaoCancelada("Operação cancelada pelo usuário.")
+                self._imprimir_png_windows(caminho_imagem, impressora)
+                time.sleep(0.2)
+
+        destino = f"impressora:{impressora or 'padrão do sistema'}"
+        self.logger.info(
+            "Impressão enviada com sucesso",
+            extra={"event": "print_done", "operation": "print", "path": destino, "total": len(codigos), "copias": copias},
+        )
+        self.fila.put(
+            {
+                "tipo": "sucesso",
+                "caminho": destino,
+                "descricao": f"Envio para impressão concluído em {impressora or 'impressora padrão'} ({copias} cópia(s)).",
+            }
+        )
+
+    def _imprimir_png_windows(self, caminho_imagem: str, impressora: str):
+        if impressora:
+            cmd = ["mspaint.exe", "/pt", caminho_imagem, impressora]
+        else:
+            cmd = ["mspaint.exe", "/p", caminho_imagem]
+        try:
+            subprocess.run(cmd, check=True, timeout=30)
+        except FileNotFoundError as exc:
+            raise RuntimeError("Não foi possível localizar o mspaint.exe para realizar a impressão.") from exc
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(f"Falha ao enviar imagem para impressão (código {exc.returncode}).") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError("Tempo excedido ao enviar imagem para a impressora.") from exc
 
     def _iniciar_progresso(self, total, invalidos=0, destino="", formato=""):
         self.cancelar_evento.clear()
@@ -938,7 +1163,7 @@ class QRCodeGenerator:
                     self._finalizar_job("completed")
                     self._finalizar_progresso(EstadoAplicacao.READY)
                     self.status_resumo_var.set(f"Concluído com sucesso. Saída: {msg.get('caminho', '')}")
-                    messagebox.showinfo("Sucesso", f"Arquivo(s) gerado(s) em: {msg.get('caminho', '')}")
+                    messagebox.showinfo("Sucesso", msg.get("descricao", f"Arquivo(s) gerado(s) em: {msg.get('caminho', '')}"))
                 elif msg["tipo"] == "erro":
                     self._atualizar_resumo_painel(caminho=self._ultimo_destino_saida)
                     self.progress_bar.configure(style="Error.Horizontal.TProgressbar")
@@ -993,6 +1218,8 @@ class QRCodeGenerator:
                 self.gerar_pdf(codigos, destino)
             elif formato == "zip":
                 self.gerar_zip(codigos, destino)
+            elif formato == "imprimir":
+                self.imprimir_codigos(codigos)
             else:
                 self.gerar_imagens(codigos, formato, destino)
         except OperacaoCancelada as exc:
@@ -1028,6 +1255,20 @@ class QRCodeGenerator:
             destino = filedialog.asksaveasfilename(defaultextension=".pdf", filetypes=[("PDF", "*.pdf")])
         elif formato == "zip":
             destino = filedialog.asksaveasfilename(defaultextension=".zip", filetypes=[("ZIP", "*.zip")])
+        elif formato == "imprimir":
+            if not sys.platform.startswith("win"):
+                messagebox.showwarning("Impressão", "A impressão integrada está disponível apenas no Windows.")
+                return
+            try:
+                copias = int(self.copias_impressao.get())
+            except Exception:
+                messagebox.showwarning("Impressão", "Informe uma quantidade de cópias válida.")
+                return
+            if copias < 1:
+                messagebox.showwarning("Impressão", "A quantidade de cópias deve ser maior que zero.")
+                return
+            impressora = self.impressora_var.get().strip()
+            destino = f"impressora:{impressora or 'padrão do sistema'}"
         else:
             destino = filedialog.askdirectory()
 
@@ -1037,6 +1278,51 @@ class QRCodeGenerator:
         self.logger.info("Iniciando geração", extra={"event": "generate_start", "operation": formato, "path": str(destino), "total": len(codigos)})
         self._iniciar_progresso(len(codigos), invalidos=invalidos, destino=str(destino), formato=formato)
         worker = threading.Thread(target=self._executar_geracao, args=(codigos, formato, destino), daemon=True)
+        worker.start()
+
+    def imprimir_teste(self):
+        if self.estado_atual in {EstadoAplicacao.LOADING, EstadoAplicacao.GENERATING, EstadoAplicacao.CANCELLING}:
+            return
+        if self.df is None or not self.column_combo.get():
+            messagebox.showwarning("Aviso", "Selecione um arquivo e uma coluna.")
+            return
+        if self.formato_saida.get() != "imprimir":
+            messagebox.showwarning("Impressão", "Selecione o formato de saída 'imprimir' para usar o teste.")
+            return
+        if not sys.platform.startswith("win"):
+            messagebox.showwarning("Impressão", "A impressão integrada está disponível apenas no Windows.")
+            return
+
+        try:
+            copias = int(self.copias_impressao.get())
+        except Exception:
+            messagebox.showwarning("Impressão", "Informe uma quantidade de cópias válida.")
+            return
+        if copias < 1:
+            messagebox.showwarning("Impressão", "A quantidade de cópias deve ser maior que zero.")
+            return
+
+        try:
+            cfg = self._build_config()
+            codigos, invalidos = self.gerar_codigos_uc.preparar_codigos(self.df, self.column_combo.get(), cfg)
+        except ValueError as exc:
+            messagebox.showwarning("Validação", str(exc))
+            return
+
+        if not codigos:
+            messagebox.showwarning("Validação", "Nenhum código válido encontrado para impressão.")
+            return
+
+        codigo_teste = [codigos[0]]
+        impressora = self.impressora_var.get().strip()
+        destino = f"impressora:{impressora or 'padrão do sistema'} (teste)"
+
+        self.logger.info(
+            "Iniciando impressão de teste",
+            extra={"event": "print_test_start", "operation": "imprimir_teste", "path": destino, "codigo": codigo_teste[0]},
+        )
+        self._iniciar_progresso(len(codigo_teste), invalidos=invalidos, destino=destino, formato="imprimir")
+        worker = threading.Thread(target=self._executar_geracao, args=(codigo_teste, "imprimir", destino), daemon=True)
         worker.start()
 
 
