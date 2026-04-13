@@ -214,7 +214,7 @@ class QRCodeGenerator:
             self.pdf_export_disponivel = True
         except Exception:
             self.pdf_export_disponivel = False
-            self.motivos_dependencias_indisponiveis.append("PDF/Impressão indisponível (faltando reportlab).")
+            self.motivos_dependencias_indisponiveis.append("PDF indisponível (faltando reportlab).")
 
         try:
             from reportlab.graphics import renderPM as _render_pm  # noqa: F401
@@ -267,7 +267,7 @@ class QRCodeGenerator:
         self.formato_combo.set(self.formato_saida.get())
         self.formato_combo.bind("<<ComboboxSelected>>", self._ao_alterar_formato_saida)
         ttk.Label(self.config_frame, text=self._t("hint.svg_only_qr", "(SVG apenas para QR)"), style="SectionHint.TLabel").grid(row=0, column=2, padx=(0, self.space_sm), sticky="w")
-        formatos_disponiveis = ["png", "zip", "svg"]
+        formatos_disponiveis = ["png", "zip", "svg", "imprimir"]
         if self.pdf_export_disponivel:
             formatos_disponiveis = ["pdf", "png", "zip", "svg", "imprimir"]
         self.formato_combo.configure(values=formatos_disponiveis)
@@ -629,7 +629,7 @@ class QRCodeGenerator:
         if not self.barcode_disponivel:
             self.tipo_codigo.set("qrcode")
 
-        formatos_disponiveis = ["png", "zip", "svg"]
+        formatos_disponiveis = ["png", "zip", "svg", "imprimir"]
         if self.pdf_export_disponivel:
             formatos_disponiveis = ["pdf", "png", "zip", "svg", "imprimir"]
         self.formato_combo.configure(values=formatos_disponiveis)
@@ -938,8 +938,8 @@ class QRCodeGenerator:
     def _build_config(self) -> GeracaoConfig:
         if self.tipo_codigo.get() == "barcode" and not self.barcode_disponivel:
             raise ValueError("Código de barras indisponível neste ambiente (dependência renderPM ausente).")
-        if self.formato_saida.get() in {"pdf", "imprimir"} and not self.pdf_export_disponivel:
-            raise ValueError("Formato PDF/Impressão indisponível neste ambiente (dependência reportlab ausente).")
+        if self.formato_saida.get() == "pdf" and not self.pdf_export_disponivel:
+            raise ValueError("Formato PDF indisponível neste ambiente (dependência reportlab ausente).")
         return GeracaoConfig(
             qr_width_cm=self._parse_float_input(self.qr_width_cm.get(), self._t("labels.qr_width", "Largura QR (cm)")),
             qr_height_cm=self._parse_float_input(self.qr_height_cm.get(), self._t("labels.qr_height", "Altura QR (cm)")),
