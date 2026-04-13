@@ -86,13 +86,18 @@ class QRCodeGenerator:
         self.arquivo_fonte = ""
         self.preview_image_ref = None
         self._preview_backend_error_shown = False
+        self._preview_after_id = None
+        self.preview_debounce_ms = 250
+        self.pdf_export_disponivel = False
+        self.barcode_disponivel = False
+        self.motivos_dependencias_indisponiveis = []
         self.cancelar_evento = threading.Event()
         self.sections = InterfaceSections()
 
-        self.qr_width_cm = tk.DoubleVar(value=4.0)
-        self.qr_height_cm = tk.DoubleVar(value=4.0)
-        self.barcode_width_cm = tk.DoubleVar(value=8.0)
-        self.barcode_height_cm = tk.DoubleVar(value=3.0)
+        self.qr_width_cm = tk.StringVar(value="4.0")
+        self.qr_height_cm = tk.StringVar(value="4.0")
+        self.barcode_width_cm = tk.StringVar(value="8.0")
+        self.barcode_height_cm = tk.StringVar(value="3.0")
         self.keep_qr_ratio = tk.BooleanVar(value=True)
         self.keep_barcode_ratio = tk.BooleanVar(value=True)
         self.qr_foreground_color = tk.StringVar(value="black")
@@ -103,8 +108,8 @@ class QRCodeGenerator:
         self.barcode_model = tk.StringVar(value="code128")
         self.preview_zoom = tk.StringVar(value="100%")
         self.preview_preset = tk.StringVar(value="A4")
-        self.preview_margin_cm = tk.DoubleVar(value=2.0)
-        self.preview_spacing_cm = tk.DoubleVar(value=1.0)
+        self.preview_margin_cm = tk.StringVar(value="2.0")
+        self.preview_spacing_cm = tk.StringVar(value="1.0")
         self.impressora_var = tk.StringVar(value="")
         self.copias_impressao = tk.IntVar(value=1)
         self.impressora_status_var = tk.StringVar(value="")
@@ -129,6 +134,7 @@ class QRCodeGenerator:
         self.estado_atual = EstadoAplicacao.IDLE
 
         self._configurar_estilos()
+        self._verificar_dependencias_essenciais()
         self.root.title(self._t("app.title", "QR / Código de Barras Generator"))
         self.barcode_model_options = self.controller.obter_modelos_barcode()
         self.barcode_label_to_key = {rotulo: chave for chave, rotulo in self.barcode_model_options}
@@ -199,6 +205,26 @@ class QRCodeGenerator:
             background=[("!disabled", "#2563eb")],
         )
 
+    def _verificar_dependencias_essenciais(self):
+        self.motivos_dependencias_indisponiveis = []
+
+        try:
+            from reportlab.pdfgen import canvas as _pdf_canvas  # noqa: F401
+
+            self.pdf_export_disponivel = True
+        except Exception:
+            self.pdf_export_disponivel = False
+            self.motivos_dependencias_indisponiveis.append("PDF/Impressão indisponível (faltando reportlab).")
+
+        try:
+            from reportlab.graphics import renderPM as _render_pm  # noqa: F401
+            from reportlab.graphics.barcode import createBarcodeDrawing as _barcode_factory  # noqa: F401
+
+            self.barcode_disponivel = True
+        except Exception:
+            self.barcode_disponivel = False
+            self.motivos_dependencias_indisponiveis.append("Código de barras indisponível (faltando backend renderPM).")
+
     def _criar_interface(self):
         conteudo = ttk.Frame(self.root, padding=self.space_md)
         conteudo.pack(fill="x")
@@ -241,40 +267,49 @@ class QRCodeGenerator:
         self.formato_combo.set(self.formato_saida.get())
         self.formato_combo.bind("<<ComboboxSelected>>", self._ao_alterar_formato_saida)
         ttk.Label(self.config_frame, text=self._t("hint.svg_only_qr", "(SVG apenas para QR)"), style="SectionHint.TLabel").grid(row=0, column=2, padx=(0, self.space_sm), sticky="w")
-        self.formato_combo.configure(values=["pdf", "png", "zip", "svg", "imprimir"])
+        formatos_disponiveis = ["png", "zip", "svg"]
+        if self.pdf_export_disponivel:
+            formatos_disponiveis = ["pdf", "png", "zip", "svg", "imprimir"]
+        self.formato_combo.configure(values=formatos_disponiveis)
+        if self.formato_saida.get() not in formatos_disponiveis:
+            self.formato_saida.set("png")
+            self.formato_combo.set("png")
 
         ttk.Label(self.config_frame, text="QR (cm LxA):").grid(row=1, column=0, sticky="e", padx=(0, 5), pady=5)
-        self.qr_w_spin = ttk.Spinbox(self.config_frame, from_=1.0, to=30.0, increment=0.1, textvariable=self.qr_width_cm, width=5, command=self.atualizar_preview, style="App.TSpinbox")
+        self.qr_w_spin = ttk.Spinbox(self.config_frame, from_=1.0, to=30.0, increment=0.1, textvariable=self.qr_width_cm, width=5, command=self.solicitar_atualizacao_preview, style="App.TSpinbox")
         self.qr_w_spin.grid(row=1, column=1, padx=(0, 2), pady=5, sticky="w")
-        self.qr_h_spin = ttk.Spinbox(self.config_frame, from_=1.0, to=30.0, increment=0.1, textvariable=self.qr_height_cm, width=5, command=self.atualizar_preview, style="App.TSpinbox")
+        self.qr_h_spin = ttk.Spinbox(self.config_frame, from_=1.0, to=30.0, increment=0.1, textvariable=self.qr_height_cm, width=5, command=self.solicitar_atualizacao_preview, style="App.TSpinbox")
         self.qr_h_spin.grid(row=1, column=2, padx=(2, 5), pady=5, sticky="w")
-        ttk.Checkbutton(self.config_frame, text="Manter proporção QR", variable=self.keep_qr_ratio, command=self.atualizar_preview).grid(row=1, column=3, padx=5, pady=5, sticky="w")
+        ttk.Checkbutton(self.config_frame, text="Manter proporção QR", variable=self.keep_qr_ratio, command=self.solicitar_atualizacao_preview).grid(row=1, column=3, padx=5, pady=5, sticky="w")
 
         ttk.Label(self.config_frame, text="Barra (cm LxA):").grid(row=2, column=0, sticky="e", padx=(0, 5), pady=5)
-        self.bar_w_spin = ttk.Spinbox(self.config_frame, from_=1.0, to=40.0, increment=0.1, textvariable=self.barcode_width_cm, width=5, command=self.atualizar_preview, style="App.TSpinbox")
+        self.bar_w_spin = ttk.Spinbox(self.config_frame, from_=1.0, to=40.0, increment=0.1, textvariable=self.barcode_width_cm, width=5, command=self.solicitar_atualizacao_preview, style="App.TSpinbox")
         self.bar_w_spin.grid(row=2, column=1, padx=(0, 2), pady=5, sticky="w")
-        self.bar_h_spin = ttk.Spinbox(self.config_frame, from_=1.0, to=20.0, increment=0.1, textvariable=self.barcode_height_cm, width=5, command=self.atualizar_preview, style="App.TSpinbox")
+        self.bar_h_spin = ttk.Spinbox(self.config_frame, from_=1.0, to=20.0, increment=0.1, textvariable=self.barcode_height_cm, width=5, command=self.solicitar_atualizacao_preview, style="App.TSpinbox")
         self.bar_h_spin.grid(row=2, column=2, padx=(2, 5), pady=5, sticky="w")
-        ttk.Checkbutton(self.config_frame, text="Manter proporção Barra", variable=self.keep_barcode_ratio, command=self.atualizar_preview).grid(row=2, column=3, padx=5, pady=5, sticky="w")
+        ttk.Checkbutton(self.config_frame, text="Manter proporção Barra", variable=self.keep_barcode_ratio, command=self.solicitar_atualizacao_preview).grid(row=2, column=3, padx=5, pady=5, sticky="w")
 
         for spin in (self.qr_w_spin, self.qr_h_spin, self.bar_w_spin, self.bar_h_spin):
-            spin.bind("<FocusOut>", lambda _e: self.atualizar_preview())
+            spin.bind("<FocusOut>", lambda _e: self.solicitar_atualizacao_preview())
+            spin.bind("<KeyRelease>", lambda _e: self.solicitar_atualizacao_preview())
 
         ttk.Label(self.config_frame, text=self._t("label.type", "Tipo:")).grid(row=3, column=0, sticky="e", padx=(0, 5), pady=5)
-        ttk.Radiobutton(
+        self.tipo_qr_radio = ttk.Radiobutton(
             self.config_frame,
             text=self._t("type.qr", "QR Code"),
             variable=self.tipo_codigo,
             value="qrcode",
             command=self._ao_alterar_tipo_codigo,
-        ).grid(row=3, column=1, sticky="w")
-        ttk.Radiobutton(
+        )
+        self.tipo_qr_radio.grid(row=3, column=1, sticky="w")
+        self.tipo_barcode_radio = ttk.Radiobutton(
             self.config_frame,
             text=self._t("type.barcode", "Código de Barras"),
             variable=self.tipo_codigo,
             value="barcode",
             command=self._ao_alterar_tipo_codigo,
-        ).grid(row=3, column=2, sticky="w")
+        )
+        self.tipo_barcode_radio.grid(row=3, column=2, sticky="w")
         ttk.Label(self.config_frame, text=self._t("label.barcode_model", "Modelo de etiqueta:")).grid(row=3, column=3, sticky="e", padx=(0, 5), pady=5)
         self.barcode_model_combo = ttk.Combobox(
             self.config_frame,
@@ -286,6 +321,13 @@ class QRCodeGenerator:
         self.barcode_model_combo.grid(row=3, column=4, padx=(2, 5), pady=5, sticky="w")
         self.barcode_model_combo.set(self.barcode_key_to_label.get(self.barcode_model.get(), "Código 128"))
         self.barcode_model_combo.bind("<<ComboboxSelected>>", self._ao_alterar_modelo_barcode)
+        aviso_dependencias = "Todos os recursos disponíveis."
+        if self.motivos_dependencias_indisponiveis:
+            aviso_dependencias = " | ".join(self.motivos_dependencias_indisponiveis)
+        self.dependency_status_var = tk.StringVar(value=aviso_dependencias)
+        ttk.Label(self.config_frame, textvariable=self.dependency_status_var, style="Muted.TLabel").grid(
+            row=7, column=0, columnspan=5, sticky="w", padx=5, pady=(2, 0)
+        )
 
         ttk.Label(self.config_frame, text=self._t("label.data_mode", "Modo de dados:")).grid(row=4, column=0, sticky="e", padx=(0, 5), pady=5)
         ttk.Radiobutton(
@@ -317,6 +359,7 @@ class QRCodeGenerator:
 
         self.atualizar_controles_formato()
         self._atualizar_controles_tipo_codigo()
+        self._aplicar_disponibilidade_dependencias()
 
         self.impressao_frame = ttk.LabelFrame(self.config_frame, text="Configuração de impressão", padding=self.space_sm)
         self.impressao_frame.grid(row=6, column=0, columnspan=4, sticky="ew", padx=5, pady=(self.space_sm, 0))
@@ -405,11 +448,11 @@ class QRCodeGenerator:
             textvariable=self.preview_preset,
             state="readonly",
             width=20,
-            values=["A4", "Etiqueta 40x20 mm", "Etiqueta 60x40 mm"],
+            values=["A4", "Etiqueta 8x10.5 cm", "Etiqueta 60x40 mm"],
             style="App.TCombobox",
         )
         self.preview_preset_combo.pack(side="left", padx=(self.space_sm, self.space_md))
-        self.preview_preset_combo.bind("<<ComboboxSelected>>", lambda _e: self.atualizar_preview())
+        self.preview_preset_combo.bind("<<ComboboxSelected>>", lambda _e: self.solicitar_atualizacao_preview())
 
         ttk.Label(preview_toolbar, text="Margem (cm):").pack(side="left")
         self.preview_margin_spin = ttk.Spinbox(
@@ -419,7 +462,7 @@ class QRCodeGenerator:
             increment=0.1,
             textvariable=self.preview_margin_cm,
             width=5,
-            command=self.atualizar_preview,
+            command=self.solicitar_atualizacao_preview,
             style="App.TSpinbox",
         )
         self.preview_margin_spin.pack(side="left", padx=(self.space_sm, self.space_md))
@@ -432,7 +475,7 @@ class QRCodeGenerator:
             increment=0.1,
             textvariable=self.preview_spacing_cm,
             width=5,
-            command=self.atualizar_preview,
+            command=self.solicitar_atualizacao_preview,
             style="App.TSpinbox",
         )
         self.preview_spacing_spin.pack(side="left", padx=(self.space_sm, self.space_md))
@@ -447,9 +490,11 @@ class QRCodeGenerator:
             style="App.TCombobox",
         )
         self.preview_zoom_combo.pack(side="left", padx=(self.space_sm, 0))
-        self.preview_zoom_combo.bind("<<ComboboxSelected>>", lambda _e: self.atualizar_preview())
-        self.preview_margin_spin.bind("<FocusOut>", lambda _e: self.atualizar_preview())
-        self.preview_spacing_spin.bind("<FocusOut>", lambda _e: self.atualizar_preview())
+        self.preview_zoom_combo.bind("<<ComboboxSelected>>", lambda _e: self.solicitar_atualizacao_preview())
+        self.preview_margin_spin.bind("<FocusOut>", lambda _e: self.solicitar_atualizacao_preview())
+        self.preview_spacing_spin.bind("<FocusOut>", lambda _e: self.solicitar_atualizacao_preview())
+        self.preview_margin_spin.bind("<KeyRelease>", lambda _e: self.solicitar_atualizacao_preview())
+        self.preview_spacing_spin.bind("<KeyRelease>", lambda _e: self.solicitar_atualizacao_preview())
 
         self.preview_escala_var = tk.StringVar(value="Escala visual: 100%")
         ttk.Label(preview_toolbar, textvariable=self.preview_escala_var, style="SectionHint.TLabel").pack(side="right")
@@ -545,30 +590,52 @@ class QRCodeGenerator:
         self._atualizar_stepper_visual()
 
     def _ao_selecionar_coluna(self, _e=None):
-        self.atualizar_preview()
+        self.solicitar_atualizacao_preview()
         self._atualizar_stepper_visual()
 
     def _ao_alterar_formato_saida(self, _e=None):
+        formatos_disponiveis = set(self.formato_combo.cget("values"))
+        if self.formato_saida.get() not in formatos_disponiveis:
+            self.formato_saida.set("png")
+            self.formato_combo.set("png")
         self._atualizar_controles_impressao()
         self._aplicar_estado_ui()
 
     def _ao_alterar_tipo_codigo(self):
         self._atualizar_controles_tipo_codigo()
-        self.atualizar_preview()
+        self.solicitar_atualizacao_preview()
 
     def _ao_alterar_modelo_barcode(self, _e=None):
         chave = self.barcode_label_to_key.get(self.barcode_model_combo.get())
         if chave:
             self.barcode_model.set(chave)
-        self.atualizar_preview()
+        self.solicitar_atualizacao_preview()
 
     def _atualizar_controles_tipo_codigo(self):
+        if not self.barcode_disponivel:
+            self.tipo_codigo.set("qrcode")
+            self.barcode_model_combo.configure(state="disabled")
+            return
         if self.tipo_codigo.get() == "barcode":
             self.barcode_model_combo.configure(state="readonly")
             if self.barcode_model.get() in self.barcode_key_to_label:
                 self.barcode_model_combo.set(self.barcode_key_to_label[self.barcode_model.get()])
         else:
             self.barcode_model_combo.configure(state="disabled")
+
+    def _aplicar_disponibilidade_dependencias(self):
+        if hasattr(self, "tipo_barcode_radio"):
+            self.tipo_barcode_radio.configure(state="normal" if self.barcode_disponivel else "disabled")
+        if not self.barcode_disponivel:
+            self.tipo_codigo.set("qrcode")
+
+        formatos_disponiveis = ["png", "zip", "svg"]
+        if self.pdf_export_disponivel:
+            formatos_disponiveis = ["pdf", "png", "zip", "svg", "imprimir"]
+        self.formato_combo.configure(values=formatos_disponiveis)
+        if self.formato_saida.get() not in formatos_disponiveis:
+            self.formato_saida.set("png")
+            self.formato_combo.set("png")
 
     def _listar_impressoras_windows(self):
         if not sys.platform.startswith("win"):
@@ -800,7 +867,8 @@ class QRCodeGenerator:
 
         self._atualizar_controles_impressao()
         if hasattr(self, "barcode_model_combo"):
-            estado_barcode = "readonly" if (self.tipo_codigo.get() == "barcode" and not bloqueado) else "disabled"
+            barcode_ativo = self.barcode_disponivel and self.tipo_codigo.get() == "barcode"
+            estado_barcode = "readonly" if (barcode_ativo and not bloqueado) else "disabled"
             self.barcode_model_combo.configure(state=estado_barcode)
         self._atualizar_stepper_visual()
 
@@ -857,12 +925,26 @@ class QRCodeGenerator:
     def _obter_valores_coluna(self, tabela, coluna):
         return self.controller.obter_valores_coluna(tabela, coluna)
 
+    def _parse_float_input(self, valor, nome_campo: str) -> float:
+        if isinstance(valor, str):
+            texto = valor.strip().replace(",", ".")
+        else:
+            texto = str(valor)
+        try:
+            return float(texto)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(self._t("validation.invalid_number", "Valor inválido para {campo}: {valor}", campo=nome_campo, valor=valor)) from exc
+
     def _build_config(self) -> GeracaoConfig:
+        if self.tipo_codigo.get() == "barcode" and not self.barcode_disponivel:
+            raise ValueError("Código de barras indisponível neste ambiente (dependência renderPM ausente).")
+        if self.formato_saida.get() in {"pdf", "imprimir"} and not self.pdf_export_disponivel:
+            raise ValueError("Formato PDF/Impressão indisponível neste ambiente (dependência reportlab ausente).")
         return GeracaoConfig(
-            qr_width_cm=float(self.qr_width_cm.get()),
-            qr_height_cm=float(self.qr_height_cm.get()),
-            barcode_width_cm=float(self.barcode_width_cm.get()),
-            barcode_height_cm=float(self.barcode_height_cm.get()),
+            qr_width_cm=self._parse_float_input(self.qr_width_cm.get(), self._t("labels.qr_width", "Largura QR (cm)")),
+            qr_height_cm=self._parse_float_input(self.qr_height_cm.get(), self._t("labels.qr_height", "Altura QR (cm)")),
+            barcode_width_cm=self._parse_float_input(self.barcode_width_cm.get(), self._t("labels.barcode_width", "Largura Código de Barras (cm)")),
+            barcode_height_cm=self._parse_float_input(self.barcode_height_cm.get(), self._t("labels.barcode_height", "Altura Código de Barras (cm)")),
             keep_qr_ratio=bool(self.keep_qr_ratio.get()),
             keep_barcode_ratio=bool(self.keep_barcode_ratio.get()),
             foreground=self.qr_foreground_color.get(),
@@ -907,15 +989,15 @@ class QRCodeGenerator:
 
     def _gerar_preview_documento(self, codigos, cfg: GeracaoConfig) -> Image.Image:
         preset = self.preview_preset.get()
-        if preset == "Etiqueta 40x20 mm":
-            largura, altura = int(40 * mm), int(20 * mm)
+        if preset == "Etiqueta 8x10.5 cm":
+            largura, altura = int(80 * mm), int(105 * mm)
         elif preset == "Etiqueta 60x40 mm":
             largura, altura = int(60 * mm), int(40 * mm)
         else:
             largura, altura = map(int, A4)
 
-        margem_cm = max(0.2, float(self.preview_margin_cm.get()))
-        espaco_cm = max(0.1, float(self.preview_spacing_cm.get()))
+        margem_cm = max(0.2, self._parse_float_input(self.preview_margin_cm.get(), self._t("labels.preview_margin", "Margem (cm)")))
+        espaco_cm = max(0.1, self._parse_float_input(self.preview_spacing_cm.get(), self._t("labels.preview_spacing", "Espaçamento (cm)")))
         margem_px = int(margem_cm * 10 * mm)
         espaco_px = int(espaco_cm * 10 * mm)
 
@@ -980,8 +1062,8 @@ class QRCodeGenerator:
         return fundo
 
     def atualizar_preview(self):
-        cfg = self._build_config()
         try:
+            cfg = self._build_config()
             codigos_preview = self._extrair_codigos_preview()
             if codigos_preview:
                 img = self._gerar_preview_documento(codigos_preview, cfg)
@@ -1018,6 +1100,15 @@ class QRCodeGenerator:
             if not self._preview_backend_error_shown:
                 messagebox.showwarning(self._t("dialog.title.preview", "Pré-visualização"), self._t("preview.update_error", "Não foi possível atualizar o preview:\n{erro}", erro=exc))
                 self._preview_backend_error_shown = True
+
+    def solicitar_atualizacao_preview(self, *_args):
+        if self._preview_after_id is not None:
+            self.root.after_cancel(self._preview_after_id)
+        self._preview_after_id = self.root.after(self.preview_debounce_ms, self._executar_preview_debounced)
+
+    def _executar_preview_debounced(self):
+        self._preview_after_id = None
+        self.atualizar_preview()
 
     def gerar_imagens(self, codigos, formato, destino, emitir_sucesso=True):
         try:
@@ -1277,7 +1368,7 @@ class QRCodeGenerator:
                     self._atualizar_resumo_painel(processado=0, ignorados=0, caminho="", job_id="")
                     if colunas:
                         self.column_combo.set(colunas[0])
-                    self.atualizar_preview()
+                    self.solicitar_atualizacao_preview()
                     self._transicionar_estado(EstadoAplicacao.READY)
                 elif msg["tipo"] == "carregamento_erro":
                     self.progress_bar.stop()
