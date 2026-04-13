@@ -34,6 +34,16 @@ class AtualizarPreviewUseCase:
 
     def gerar_amostra(self, cfg: GeracaoConfig) -> str:
         if cfg.tipo_codigo == "barcode":
+            if cfg.barcode_model == "ean8":
+                return "1234567"
+            if cfg.barcode_model == "ean13":
+                return "789123456789"
+            if cfg.barcode_model == "upca":
+                return "12345678901"
+            if cfg.barcode_model == "dun14":
+                return "12345678901231"
+            if cfg.barcode_model == "interleaved2of5":
+                return "12345678"
             return "123456789012"
         return "https://example.com"
 

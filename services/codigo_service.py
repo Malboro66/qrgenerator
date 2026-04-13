@@ -1,5 +1,4 @@
 import csv
-import io
 
 import qrcode
 from PIL import Image
@@ -11,6 +10,20 @@ class CodigoService:
     """Camada de negócio para carga, validação e geração de códigos."""
 
     DPI_PADRAO = 200
+    BARCODE_MODELOS_SUPORTADOS = {
+        "ean13": ("Código de Barras EAN-13", "EAN13"),
+        "dun14": ("Código de Barras DUN-14", "I2of5"),
+        "upca": ("UPC ou Código Universal de Produto", "UPCA"),
+        "code11": ("Code 11", "Code11"),
+        "code39": ("Code 39", "Standard39"),
+        "code93": ("Code 93", "Standard93"),
+        "ean8": ("EAN-8", "EAN8"),
+        "interleaved2of5": ("Intercalado 2 de 5", "I2of5"),
+        "code128": ("Código 128", "Code128"),
+        "gs1128": ("GS1-128", "Code128"),
+        "codabar": ("Codabar", "Codabar"),
+        "datamatrix": ("Data Matrix", "ECC200DataMatrix"),
+    }
 
     @staticmethod
     def formatar_excecao(exc: Exception, contexto: str) -> str:
@@ -94,6 +107,26 @@ class CodigoService:
         return canvas
 
     @staticmethod
+    def obter_modelos_barcode():
+        return [(chave, rotulo) for chave, (rotulo, _nome_reportlab) in CodigoService.BARCODE_MODELOS_SUPORTADOS.items()]
+
+    @staticmethod
+    def _validar_modelo_barcode(dado: str, modelo: str):
+        if modelo == "ean13" and (not dado.isdigit() or len(dado) not in (12, 13)):
+            raise ValueError("EAN-13 exige apenas dígitos com 12 ou 13 caracteres.")
+        if modelo == "ean8" and (not dado.isdigit() or len(dado) not in (7, 8)):
+            raise ValueError("EAN-8 exige apenas dígitos com 7 ou 8 caracteres.")
+        if modelo == "upca" and (not dado.isdigit() or len(dado) not in (11, 12)):
+            raise ValueError("UPC-A exige apenas dígitos com 11 ou 12 caracteres.")
+        if modelo == "dun14" and (not dado.isdigit() or len(dado) != 14):
+            raise ValueError("DUN-14 exige exatamente 14 dígitos numéricos.")
+        if modelo == "interleaved2of5":
+            if not dado.isdigit():
+                raise ValueError("Intercalado 2 de 5 exige apenas dígitos.")
+            if len(dado) % 2 != 0:
+                raise ValueError("Intercalado 2 de 5 exige quantidade par de dígitos.")
+
+    @staticmethod
     def validar_parametros_geracao(codigos, cfg: GeracaoConfig):
         if not isinstance(codigos, list) or not codigos:
             raise ValueError('Nenhum código válido foi encontrado para geração.')
@@ -121,6 +154,12 @@ class CodigoService:
             if cfg.tipo_codigo == 'barcode' and any(ord(ch) < 32 for ch in dado):
                 invalidos += 1
                 continue
+            if cfg.tipo_codigo == "barcode":
+                try:
+                    CodigoService._validar_modelo_barcode(dado.strip(), cfg.barcode_model)
+                except ValueError:
+                    invalidos += 1
+                    continue
             validos.append(str(bruto))
 
         if not validos:
@@ -129,48 +168,29 @@ class CodigoService:
 
     @staticmethod
     def _gerar_barcode_pil(dado: str, cfg: GeracaoConfig) -> Image.Image:
-        # Backend principal: python-barcode + Pillow (não depende de renderPM).
         width_px = CodigoService._cm_para_px(cfg.barcode_width_cm)
         height_px = CodigoService._cm_para_px(cfg.barcode_height_cm)
-        try:
-            from barcode import Code128
-            from barcode.writer import ImageWriter
+        dado_limpo = dado.strip()
+        modelo = cfg.barcode_model or "code128"
+        if modelo not in CodigoService.BARCODE_MODELOS_SUPORTADOS:
+            raise RuntimeError(f"Modelo de código de barras não suportado: {modelo}")
+        CodigoService._validar_modelo_barcode(dado_limpo, modelo)
+        _rotulo, nome_reportlab = CodigoService.BARCODE_MODELOS_SUPORTADOS[modelo]
 
-            buffer = io.BytesIO()
-            writer = ImageWriter()
-            codigo = Code128(dado, writer=writer)
-            codigo.write(
-                buffer,
-                options={
-                    'module_width': 0.25,
-                    'module_height': 18.0,
-                    'font_size': 10,
-                    'text_distance': 4,
-                    'quiet_zone': 2.0,
-                    'dpi': CodigoService.DPI_PADRAO,
-                },
-            )
-            buffer.seek(0)
-            img = Image.open(buffer).convert('RGB')
-            return CodigoService._resize_with_ratio(img, width_px, height_px, cfg.keep_barcode_ratio)
-        except (ModuleNotFoundError, ImportError):
-            pass
-        except Exception as exc:
-            raise RuntimeError('Falha ao gerar barcode com python-barcode. Verifique os dados de entrada.') from exc
-
-        # Fallback opcional: renderPM
         try:
             from reportlab.graphics import renderPM
             from reportlab.graphics.barcode import createBarcodeDrawing
             from reportlab.lib.units import mm
 
-            desenho = createBarcodeDrawing('Code128', value=dado, barHeight=20 * mm, barWidth=0.45, humanReadable=True)
+            opcoes = {"value": dado_limpo}
+            if nome_reportlab != "ECC200DataMatrix":
+                opcoes.update({"barHeight": 20 * mm, "barWidth": 0.45, "humanReadable": True})
+            desenho = createBarcodeDrawing(nome_reportlab, **opcoes)
             img = renderPM.drawToPIL(desenho, dpi=CodigoService.DPI_PADRAO).convert('RGB')
             return CodigoService._resize_with_ratio(img, width_px, height_px, cfg.keep_barcode_ratio)
         except Exception as exc:
             raise RuntimeError(
-                "Geração de código de barras indisponível: instale a dependência opcional 'python-barcode' "
-                "(recomendado) ou habilite o backend renderPM do ReportLab."
+                "Geração de código de barras indisponível: habilite o backend renderPM do ReportLab."
             ) from exc
 
     @staticmethod

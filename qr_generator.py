@@ -97,6 +97,7 @@ class QRCodeGenerator:
         self.modo = tk.StringVar(value="texto")
         self.formato_saida = tk.StringVar(value="pdf")
         self.tipo_codigo = tk.StringVar(value="qrcode")
+        self.barcode_model = tk.StringVar(value="code128")
         self.preview_zoom = tk.StringVar(value="100%")
         self.preview_preset = tk.StringVar(value="A4")
         self.preview_margin_cm = tk.DoubleVar(value=2.0)
@@ -125,6 +126,9 @@ class QRCodeGenerator:
         self.estado_atual = EstadoAplicacao.IDLE
 
         self._configurar_estilos()
+        self.barcode_model_options = self.service.obter_modelos_barcode()
+        self.barcode_label_to_key = {rotulo: chave for chave, rotulo in self.barcode_model_options}
+        self.barcode_key_to_label = {chave: rotulo for chave, rotulo in self.barcode_model_options}
         self._criar_interface()
         self.atualizar_preview()
         self._aplicar_estado_ui()
@@ -253,15 +257,26 @@ class QRCodeGenerator:
             text="QR Code",
             variable=self.tipo_codigo,
             value="qrcode",
-            command=self.atualizar_preview,
+            command=self._ao_alterar_tipo_codigo,
         ).grid(row=3, column=1, sticky="w")
         ttk.Radiobutton(
             self.config_frame,
-            text="Código de Barras (Code128)",
+            text="Código de Barras",
             variable=self.tipo_codigo,
             value="barcode",
-            command=self.atualizar_preview,
-        ).grid(row=3, column=2, columnspan=2, sticky="w")
+            command=self._ao_alterar_tipo_codigo,
+        ).grid(row=3, column=2, sticky="w")
+        ttk.Label(self.config_frame, text="Modelo de etiqueta:").grid(row=3, column=3, sticky="e", padx=(0, 5), pady=5)
+        self.barcode_model_combo = ttk.Combobox(
+            self.config_frame,
+            state="readonly",
+            width=30,
+            style="App.TCombobox",
+            values=[rotulo for _chave, rotulo in self.barcode_model_options],
+        )
+        self.barcode_model_combo.grid(row=3, column=4, padx=(2, 5), pady=5, sticky="w")
+        self.barcode_model_combo.set(self.barcode_key_to_label.get(self.barcode_model.get(), "Código 128"))
+        self.barcode_model_combo.bind("<<ComboboxSelected>>", self._ao_alterar_modelo_barcode)
 
         ttk.Label(self.config_frame, text="Modo de dados:").grid(row=4, column=0, sticky="e", padx=(0, 5), pady=5)
         ttk.Radiobutton(
@@ -292,6 +307,7 @@ class QRCodeGenerator:
         ttk.Entry(self.numerico_controls, textvariable=self.sufixo_numerico, width=10, style="App.TEntry").pack(side="left")
 
         self.atualizar_controles_formato()
+        self._atualizar_controles_tipo_codigo()
 
         self.impressao_frame = ttk.LabelFrame(self.config_frame, text="Configuração de impressão", padding=self.space_sm)
         self.impressao_frame.grid(row=6, column=0, columnspan=4, sticky="ew", padx=5, pady=(self.space_sm, 0))
@@ -512,6 +528,24 @@ class QRCodeGenerator:
     def _ao_alterar_formato_saida(self, _e=None):
         self._atualizar_controles_impressao()
         self._aplicar_estado_ui()
+
+    def _ao_alterar_tipo_codigo(self):
+        self._atualizar_controles_tipo_codigo()
+        self.atualizar_preview()
+
+    def _ao_alterar_modelo_barcode(self, _e=None):
+        chave = self.barcode_label_to_key.get(self.barcode_model_combo.get())
+        if chave:
+            self.barcode_model.set(chave)
+        self.atualizar_preview()
+
+    def _atualizar_controles_tipo_codigo(self):
+        if self.tipo_codigo.get() == "barcode":
+            self.barcode_model_combo.configure(state="readonly")
+            if self.barcode_model.get() in self.barcode_key_to_label:
+                self.barcode_model_combo.set(self.barcode_key_to_label[self.barcode_model.get()])
+        else:
+            self.barcode_model_combo.configure(state="disabled")
 
     def _listar_impressoras_windows(self):
         if not sys.platform.startswith("win"):
@@ -734,6 +768,9 @@ class QRCodeGenerator:
             self.column_combo.configure(state="disabled")
 
         self._atualizar_controles_impressao()
+        if hasattr(self, "barcode_model_combo"):
+            estado_barcode = "readonly" if (self.tipo_codigo.get() == "barcode" and not bloqueado) else "disabled"
+            self.barcode_model_combo.configure(state=estado_barcode)
         self._atualizar_stepper_visual()
 
     def cancelar_operacao(self):
@@ -800,6 +837,7 @@ class QRCodeGenerator:
             foreground=self.qr_foreground_color.get(),
             background=self.qr_background_color.get(),
             tipo_codigo=self.tipo_codigo.get(),
+            barcode_model=self.barcode_model.get(),
             modo=self.modo.get(),
             prefixo=self.prefixo_numerico.get(),
             sufixo=self.sufixo_numerico.get(),

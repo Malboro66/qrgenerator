@@ -12,6 +12,7 @@ class GeracaoConfig:
     foreground: str
     background: str
     tipo_codigo: str
+    barcode_model: str
     modo: str
     prefixo: str
     sufixo: str
