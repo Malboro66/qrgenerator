@@ -1,0 +1,6 @@
+pandas>=1.5.0
+qrcode[pil]>=7.4.0
+reportlab>=4.0.0
+Pillow>=9.0.0
+openpyxl>=3.1.0
+python-barcode>=0.15.0

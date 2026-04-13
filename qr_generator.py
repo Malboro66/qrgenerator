@@ -19,12 +19,8 @@ from qrcode.image.svg import SvgImage
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-from application.use_cases import CarregarArquivoUseCase, GerarCodigosUseCase, AtualizarPreviewUseCase
+from app_controller import AppController
 from models.geracao_config import GeracaoConfig
-from services.codigo_service import CodigoService
-from services.job_run_store import JobRunStore
-from services.metrics_store import MetricsStore
-from logging_utils import setup_logging
 
 # Equivalentes do ReportLab para evitar dependência em tempo de import.
 MM_TO_POINTS = 72 / 25.4
@@ -51,6 +47,15 @@ class ItemCodigo:
     valor: str
 
 
+@dataclass
+class InterfaceSections:
+    dados_frame: ttk.LabelFrame | None = None
+    config_frame: ttk.LabelFrame | None = None
+    acao_status_frame: ttk.LabelFrame | None = None
+    preview_frame: ttk.LabelFrame | None = None
+    resultado_frame: ttk.LabelFrame | None = None
+
+
 class OperacaoCancelada(Exception):
     """Sinaliza cancelamento de operação longa."""
 
@@ -67,24 +72,22 @@ class EstadoAplicacao(Enum):
 class QRCodeGenerator:
     """Aplicativo desktop para geração de QR Codes e códigos de barras."""
 
-    def __init__(self, root: tk.Tk):
+    def __init__(self, root: tk.Tk, controller: AppController | None = None):
         self.root = root
-        self.root.title("QR / Código de Barras Generator")
+        self.root.title("")
         self.root.geometry("980x680")
 
         self.fila = queue.Queue()
-        self.logger = setup_logging()
-        self.service = CodigoService()
-        self.carregar_arquivo_uc = CarregarArquivoUseCase(self.service)
-        self.gerar_codigos_uc = GerarCodigosUseCase(self.service)
-        self.atualizar_preview_uc = AtualizarPreviewUseCase(self.service)
-        self.job_store = JobRunStore()
-        self.metrics_store = MetricsStore()
+        self.controller = controller or AppController.build_default()
+        self.logger = self.controller.logger
+        self.job_store = self.controller.job_store
+        self.metrics_store = self.controller.metrics_store
         self.df = None
         self.arquivo_fonte = ""
         self.preview_image_ref = None
         self._preview_backend_error_shown = False
         self.cancelar_evento = threading.Event()
+        self.sections = InterfaceSections()
 
         self.qr_width_cm = tk.DoubleVar(value=4.0)
         self.qr_height_cm = tk.DoubleVar(value=4.0)
@@ -126,13 +129,17 @@ class QRCodeGenerator:
         self.estado_atual = EstadoAplicacao.IDLE
 
         self._configurar_estilos()
-        self.barcode_model_options = self.service.obter_modelos_barcode()
+        self.root.title(self._t("app.title", "QR / Código de Barras Generator"))
+        self.barcode_model_options = self.controller.obter_modelos_barcode()
         self.barcode_label_to_key = {rotulo: chave for chave, rotulo in self.barcode_model_options}
         self.barcode_key_to_label = {chave: rotulo for chave, rotulo in self.barcode_model_options}
         self._criar_interface()
         self.atualizar_preview()
         self._aplicar_estado_ui()
         self.root.after(100, self.verificar_fila)
+
+    def _t(self, key: str, default: str = "", **kwargs) -> str:
+        return self.controller.t(key, default, **kwargs)
 
     def _configurar_estilos(self):
         self.style = ttk.Style(self.root)
@@ -198,28 +205,30 @@ class QRCodeGenerator:
 
         self.stepper_frame = ttk.Frame(conteudo)
         self.stepper_frame.pack(fill="x", pady=(0, self.space_sm))
-        self.step1_button = ttk.Button(self.stepper_frame, text="1. Entrada", style="Step.TButton", command=lambda: self._definir_etapa(1))
+        self.step1_button = ttk.Button(self.stepper_frame, text=self._t("step.input", "1. Entrada"), style="Step.TButton", command=lambda: self._definir_etapa(1))
         self.step1_button.pack(side="left", padx=(0, self.space_sm))
-        self.step2_button = ttk.Button(self.stepper_frame, text="2. Configuração", style="Step.TButton", command=lambda: self._definir_etapa(2))
+        self.step2_button = ttk.Button(self.stepper_frame, text=self._t("step.config", "2. Configuração"), style="Step.TButton", command=lambda: self._definir_etapa(2))
         self.step2_button.pack(side="left", padx=(0, self.space_sm))
-        self.step3_button = ttk.Button(self.stepper_frame, text="3. Ação", style="Step.TButton", command=lambda: self._definir_etapa(3))
+        self.step3_button = ttk.Button(self.stepper_frame, text=self._t("step.action", "3. Ação"), style="Step.TButton", command=lambda: self._definir_etapa(3))
         self.step3_button.pack(side="left")
 
-        self.dados_frame = ttk.LabelFrame(conteudo, text="1) Entrada de dados", padding=self.space_md)
+        self.dados_frame = ttk.LabelFrame(conteudo, text=self._t("section.input", "1) Entrada de dados"), padding=self.space_md)
         self.dados_frame.pack(fill="x", pady=(0, self.space_sm))
+        self.sections.dados_frame = self.dados_frame
 
-        self.select_button = ttk.Button(self.dados_frame, text="1. Selecionar planilha", command=self.selecionar_arquivo)
+        self.select_button = ttk.Button(self.dados_frame, text=self._t("button.select_spreadsheet", "1. Selecionar planilha"), command=self.selecionar_arquivo)
         self.select_button.grid(row=0, column=0, padx=self.space_sm, pady=self.space_sm, sticky="w")
 
-        ttk.Label(self.dados_frame, text="Coluna:").grid(row=0, column=1, padx=(self.space_md, self.space_sm), pady=self.space_sm, sticky="e")
+        ttk.Label(self.dados_frame, text=self._t("label.column", "Coluna:")).grid(row=0, column=1, padx=(self.space_md, self.space_sm), pady=self.space_sm, sticky="e")
         self.column_combo = ttk.Combobox(self.dados_frame, state="disabled", width=35, style="App.TCombobox")
         self.column_combo.grid(row=0, column=2, padx=self.space_sm, pady=self.space_sm, sticky="w")
         self.column_combo.bind("<<ComboboxSelected>>", self._ao_selecionar_coluna)
 
-        self.config_frame = ttk.LabelFrame(conteudo, text="2) Configuração", padding=self.space_md)
+        self.config_frame = ttk.LabelFrame(conteudo, text=self._t("section.config", "2) Configuração"), padding=self.space_md)
         self.config_frame.pack(fill="x", pady=(0, self.space_sm))
+        self.sections.config_frame = self.config_frame
 
-        ttk.Label(self.config_frame, text="Formato de saída").grid(row=0, column=0, sticky="e", padx=(0, self.space_sm), pady=self.space_sm)
+        ttk.Label(self.config_frame, text=self._t("label.output_format", "Formato de saída")).grid(row=0, column=0, sticky="e", padx=(0, self.space_sm), pady=self.space_sm)
         self.formato_combo = ttk.Combobox(
             self.config_frame,
             style="App.TCombobox",
@@ -231,7 +240,7 @@ class QRCodeGenerator:
         self.formato_combo.grid(row=0, column=1, padx=self.space_sm, pady=self.space_sm, sticky="w")
         self.formato_combo.set(self.formato_saida.get())
         self.formato_combo.bind("<<ComboboxSelected>>", self._ao_alterar_formato_saida)
-        ttk.Label(self.config_frame, text="(SVG apenas para QR)", style="SectionHint.TLabel").grid(row=0, column=2, padx=(0, self.space_sm), sticky="w")
+        ttk.Label(self.config_frame, text=self._t("hint.svg_only_qr", "(SVG apenas para QR)"), style="SectionHint.TLabel").grid(row=0, column=2, padx=(0, self.space_sm), sticky="w")
         self.formato_combo.configure(values=["pdf", "png", "zip", "svg", "imprimir"])
 
         ttk.Label(self.config_frame, text="QR (cm LxA):").grid(row=1, column=0, sticky="e", padx=(0, 5), pady=5)
@@ -251,22 +260,22 @@ class QRCodeGenerator:
         for spin in (self.qr_w_spin, self.qr_h_spin, self.bar_w_spin, self.bar_h_spin):
             spin.bind("<FocusOut>", lambda _e: self.atualizar_preview())
 
-        ttk.Label(self.config_frame, text="Tipo:").grid(row=3, column=0, sticky="e", padx=(0, 5), pady=5)
+        ttk.Label(self.config_frame, text=self._t("label.type", "Tipo:")).grid(row=3, column=0, sticky="e", padx=(0, 5), pady=5)
         ttk.Radiobutton(
             self.config_frame,
-            text="QR Code",
+            text=self._t("type.qr", "QR Code"),
             variable=self.tipo_codigo,
             value="qrcode",
             command=self._ao_alterar_tipo_codigo,
         ).grid(row=3, column=1, sticky="w")
         ttk.Radiobutton(
             self.config_frame,
-            text="Código de Barras",
+            text=self._t("type.barcode", "Código de Barras"),
             variable=self.tipo_codigo,
             value="barcode",
             command=self._ao_alterar_tipo_codigo,
         ).grid(row=3, column=2, sticky="w")
-        ttk.Label(self.config_frame, text="Modelo de etiqueta:").grid(row=3, column=3, sticky="e", padx=(0, 5), pady=5)
+        ttk.Label(self.config_frame, text=self._t("label.barcode_model", "Modelo de etiqueta:")).grid(row=3, column=3, sticky="e", padx=(0, 5), pady=5)
         self.barcode_model_combo = ttk.Combobox(
             self.config_frame,
             state="readonly",
@@ -278,17 +287,17 @@ class QRCodeGenerator:
         self.barcode_model_combo.set(self.barcode_key_to_label.get(self.barcode_model.get(), "Código 128"))
         self.barcode_model_combo.bind("<<ComboboxSelected>>", self._ao_alterar_modelo_barcode)
 
-        ttk.Label(self.config_frame, text="Modo de dados:").grid(row=4, column=0, sticky="e", padx=(0, 5), pady=5)
+        ttk.Label(self.config_frame, text=self._t("label.data_mode", "Modo de dados:")).grid(row=4, column=0, sticky="e", padx=(0, 5), pady=5)
         ttk.Radiobutton(
             self.config_frame,
-            text="Texto",
+            text=self._t("mode.text", "Texto"),
             variable=self.modo,
             value="texto",
             command=self.atualizar_controles_formato,
         ).grid(row=4, column=1, sticky="w")
         ttk.Radiobutton(
             self.config_frame,
-            text="Numérico",
+            text=self._t("mode.numeric", "Numérico"),
             variable=self.modo,
             value="numerico",
             command=self.atualizar_controles_formato,
@@ -346,15 +355,16 @@ class QRCodeGenerator:
         self.atualizar_lista_impressoras()
         self._atualizar_controles_impressao()
 
-        self.acao_status_frame = ttk.LabelFrame(conteudo, text="3) Ação + Status", padding=self.space_md)
+        self.acao_status_frame = ttk.LabelFrame(conteudo, text=self._t("section.action_status", "3) Ação + Status"), padding=self.space_md)
         self.acao_status_frame.pack(fill="x")
+        self.sections.acao_status_frame = self.acao_status_frame
 
         botoes_frame = ttk.Frame(self.acao_status_frame)
         botoes_frame.pack(fill="x", pady=(0, self.space_sm))
 
         self.generate_button = ttk.Button(
             botoes_frame,
-            text="3. Gerar códigos",
+            text=self._t("button.generate", "3. Gerar códigos"),
             state="disabled",
             style="Primary.TButton",
             command=self.gerar_a_partir_da_tabela,
@@ -372,19 +382,20 @@ class QRCodeGenerator:
 
         self.cancel_button = ttk.Button(
             botoes_frame,
-            text="Cancelar geração",
+            text=self._t("button.cancel", "Cancelar geração"),
             state="disabled",
             style="Secondary.TButton",
             command=self.cancelar_operacao,
         )
         self.cancel_button.pack(side="left")
 
-        self.status_resumo_var = tk.StringVar(value="Pronto para iniciar. Selecione um arquivo para continuar.")
+        self.status_resumo_var = tk.StringVar(value=self._t("status.ready", "Pronto para iniciar. Selecione um arquivo para continuar."))
         ttk.Label(self.acao_status_frame, textvariable=self.status_resumo_var).pack(anchor="w")
         ttk.Label(self.acao_status_frame, text="Dica: o botão principal fica ativo após carregar um arquivo e escolher a coluna.", style="Muted.TLabel").pack(anchor="w", pady=(2, 0))
 
         preview_frame = ttk.LabelFrame(self.root, text="Pré-visualização", padding=self.space_md)
         preview_frame.pack(fill="both", expand=True, padx=self.space_md, pady=self.space_md)
+        self.sections.preview_frame = preview_frame
 
         preview_toolbar = ttk.Frame(preview_frame)
         preview_toolbar.pack(fill="x", pady=(0, self.space_sm))
@@ -459,6 +470,7 @@ class QRCodeGenerator:
 
         self.resultado_frame = ttk.LabelFrame(self.root, text="Resumo da operação", padding=self.space_md)
         self.resultado_frame.pack(fill="x", padx=self.space_md, pady=(0, self.space_md))
+        self.sections.resultado_frame = self.resultado_frame
 
         self.resumo_processado_var = tk.StringVar(value="Total processado: 0")
         self.resumo_ignorados_var = tk.StringVar(value="Ignorados por validação: 0")
@@ -497,17 +509,28 @@ class QRCodeGenerator:
     def _definir_etapa(self, etapa: int, forcar: bool = False):
         if not forcar:
             if etapa >= 2 and self.df is None:
-                messagebox.showwarning("Etapa bloqueada", "Para avançar para Configuração, selecione e carregue um arquivo.")
-                self.status_resumo_var.set("Etapa 2 bloqueada: selecione um arquivo primeiro.")
+                messagebox.showwarning(
+                    self._t("dialog.title.step_locked", "Etapa bloqueada"),
+                    self._t("dialog.step2_blocked", "Para avançar para Configuração, selecione e carregue um arquivo."),
+                )
+                self.status_resumo_var.set(self._t("status.step2_blocked", "Etapa 2 bloqueada: selecione um arquivo primeiro."))
                 return
             if etapa >= 3 and (self.df is None or not self.column_combo.get()):
-                messagebox.showwarning("Etapa bloqueada", "Para avançar para Ação, selecione uma coluna válida.")
-                self.status_resumo_var.set("Etapa 3 bloqueada: selecione uma coluna válida.")
+                messagebox.showwarning(
+                    self._t("dialog.title.step_locked", "Etapa bloqueada"),
+                    self._t("dialog.step3_blocked", "Para avançar para Ação, selecione uma coluna válida."),
+                )
+                self.status_resumo_var.set(self._t("status.step3_blocked", "Etapa 3 bloqueada: selecione uma coluna válida."))
                 return
 
         self.etapa_atual = etapa
-        for frame in (self.dados_frame, self.config_frame, self.acao_status_frame):
-            frame.pack_forget()
+        for frame in (
+            self.sections.dados_frame,
+            self.sections.config_frame,
+            self.sections.acao_status_frame,
+        ):
+            if frame is not None:
+                frame.pack_forget()
 
         if etapa == 1:
             self.dados_frame.pack(fill="x", pady=(0, self.space_sm))
@@ -584,15 +607,15 @@ class QRCodeGenerator:
     def atualizar_lista_impressoras(self, notificar=False):
         if not sys.platform.startswith("win"):
             self.impressora_combo.configure(state="disabled", values=[])
-            self.impressora_status_var.set("Impressão integrada disponível apenas no Windows.")
+            self.impressora_status_var.set(self._t("print.windows_only", "Impressão integrada disponível apenas no Windows."))
             return
         try:
             impressoras, padrao = self._listar_impressoras_windows()
         except Exception as exc:
             self.impressora_combo.configure(state="disabled", values=[])
-            self.impressora_status_var.set("Não foi possível consultar as impressoras instaladas.")
+            self.impressora_status_var.set(self._t("print.query_error", "Não foi possível consultar as impressoras instaladas."))
             if notificar:
-                messagebox.showerror("Impressão", f"Erro ao listar impressoras:\n{exc}")
+                messagebox.showerror(self._t("dialog.title.print", "Impressão"), self._t("print.list_error", "Erro ao listar impressoras:\n{erro}", erro=exc))
             return
 
         self.impressora_combo.configure(values=impressoras)
@@ -602,16 +625,21 @@ class QRCodeGenerator:
             self.impressora_var.set(selecionada)
             self.impressora_combo.configure(state="readonly")
             self.impressora_status_var.set(
-                f"{len(impressoras)} impressora(s) encontrada(s). Padrão: {padrao or 'não definida'}."
+                self._t(
+                    "print.found_summary",
+                    "{quantidade} impressora(s) encontrada(s). Padrão: {padrao}.",
+                    quantidade=len(impressoras),
+                    padrao=padrao or self._t("print.not_defined", "não definida"),
+                )
             )
             if notificar:
-                messagebox.showinfo("Impressão", "Lista de impressoras atualizada.")
+                messagebox.showinfo(self._t("dialog.title.print", "Impressão"), self._t("print.list_updated", "Lista de impressoras atualizada."))
         else:
             self.impressora_var.set("")
             self.impressora_combo.configure(state="disabled")
-            self.impressora_status_var.set("Nenhuma impressora disponível no sistema.")
+            self.impressora_status_var.set(self._t("print.none_available", "Nenhuma impressora disponível no sistema."))
             if notificar:
-                messagebox.showwarning("Impressão", "Nenhuma impressora foi encontrada.")
+                messagebox.showwarning(self._t("dialog.title.print", "Impressão"), self._t("print.none_found", "Nenhuma impressora foi encontrada."))
 
     def _atualizar_controles_impressao(self):
         formato_impressao = self.formato_saida.get() == "imprimir"
@@ -734,7 +762,10 @@ class QRCodeGenerator:
             else:
                 subprocess.Popen(["xdg-open", pasta])
         except Exception as exc:
-            messagebox.showerror("Erro", f"Não foi possível abrir a pasta de saída:\n{exc}")
+            messagebox.showerror(
+                self._t("message.error", "Erro"),
+                self._t("error.open_output_folder", "Não foi possível abrir a pasta de saída:\n{erro}", erro=exc),
+            )
 
     def atualizar_controles_formato(self):
         if self.modo.get() == "texto":
@@ -778,15 +809,15 @@ class QRCodeGenerator:
             return
         self.cancelar_evento.set()
         self._transicionar_estado(EstadoAplicacao.CANCELLING)
-        self.progress_label_var.set("Cancelando operação...")
+        self.progress_label_var.set(self._t("progress.cancelling", "Cancelando operação..."))
 
     def selecionar_arquivo(self):
         if self.estado_atual in {EstadoAplicacao.LOADING, EstadoAplicacao.GENERATING, EstadoAplicacao.CANCELLING}:
             return
 
         caminho = filedialog.askopenfilename(
-            title="Selecione CSV ou Excel",
-            filetypes=[("Arquivos de dados", "*.csv *.xlsx")],
+            title=self._t("filedialog.open_data", "Selecione CSV ou Excel"),
+            filetypes=[(self._t("filedialog.data_files", "Arquivos de dados"), "*.csv *.xlsx")],
         )
         if not caminho:
             return
@@ -796,8 +827,8 @@ class QRCodeGenerator:
         self.progress_bar.configure(mode="indeterminate")
         self.progress_bar["value"] = 0
         self.progress_bar.start(10)
-        self.progress_label_var.set("Carregando arquivo, aguarde...")
-        self.status_resumo_var.set("Carregando dados da planilha...")
+        self.progress_label_var.set(self._t("progress.loading_file", "Carregando arquivo, aguarde..."))
+        self.status_resumo_var.set(self._t("status.loading_spreadsheet", "Carregando dados da planilha..."))
         self.progress_frame.pack(fill="x")
 
         self.logger.info("Iniciando carregamento de arquivo", extra={"event": "load_start", "operation": "load", "path": caminho})
@@ -814,17 +845,17 @@ class QRCodeGenerator:
             self.fila.put({"tipo": "carregamento_erro", "msg": str(exc)})
 
     def _formatar_excecao(self, exc: Exception, contexto: str) -> str:
-        return self.service.formatar_excecao(exc, contexto)
+        return self.controller.formatar_excecao(exc, contexto)
 
     def _carregar_tabela(self, caminho):
         """Carrega CSV/XLSX com fallback quando pandas/numpy não estiverem disponíveis."""
-        return self.carregar_arquivo_uc.execute(caminho)
+        return self.controller.carregar_tabela(caminho)
 
     def _obter_colunas(self, tabela):
-        return self.service.obter_colunas(tabela)
+        return self.controller.obter_colunas(tabela)
 
     def _obter_valores_coluna(self, tabela, coluna):
-        return self.service.obter_valores_coluna(tabela, coluna)
+        return self.controller.obter_valores_coluna(tabela, coluna)
 
     def _build_config(self) -> GeracaoConfig:
         return GeracaoConfig(
@@ -847,25 +878,25 @@ class QRCodeGenerator:
 
     def _validar_parametros_geracao(self, codigos, cfg: GeracaoConfig | None = None):
         cfg = cfg or self._build_config()
-        return self.service.validar_parametros_geracao(codigos, cfg)
+        return self.controller.validar_parametros_geracao(codigos, cfg)
 
     def _sanitizar_nome_arquivo(self, nome: str, fallback: str) -> str:
-        return self.service.sanitizar_nome_arquivo(nome, fallback)
+        return self.controller.sanitizar_nome_arquivo(nome, fallback)
 
     def _normalizar_dado(self, valor: str, cfg: GeracaoConfig | None = None) -> str:
         cfg = cfg or self._build_config()
-        return self.service.normalizar_dado(valor, cfg)
+        return self.controller.normalizar_dado(valor, cfg)
 
     def _gerar_imagem_obj(self, dado: str, cfg: GeracaoConfig | None = None) -> Image.Image:
         cfg = cfg or self._build_config()
-        return self.service.gerar_imagem_obj(dado, cfg)
+        return self.controller.gerar_imagem_obj(dado, cfg)
 
     def _extrair_codigos_preview(self):
         if self.df is None or not self.column_combo.get():
             return []
         try:
             cfg = self._build_config()
-            return self.atualizar_preview_uc.extrair_codigos_preview(
+            return self.controller.extrair_codigos_preview(
                 self.df,
                 self.column_combo.get(),
                 cfg,
@@ -955,7 +986,7 @@ class QRCodeGenerator:
             if codigos_preview:
                 img = self._gerar_preview_documento(codigos_preview, cfg)
             else:
-                _ = self.atualizar_preview_uc.gerar_amostra(cfg)
+                _ = self.controller.gerar_amostra_preview(cfg)
                 img = self._gerar_preview_documento(["123456789"], cfg)
 
             zoom_txt = self.preview_zoom.get().replace("%", "")
@@ -976,7 +1007,7 @@ class QRCodeGenerator:
             # Evita quebrar callback do Tkinter quando backend opcional do reportlab não está disponível.
             self.preview_label.configure(image="", text="Preview indisponível para barcode neste ambiente")
             if not self._preview_backend_error_shown:
-                messagebox.showwarning("Dependência opcional ausente", str(exc))
+                messagebox.showwarning(self._t("dialog.title.missing_dependency", "Dependência opcional ausente"), str(exc))
                 self._preview_backend_error_shown = True
         except Exception as exc:
             self.preview_label.configure(image="", text="Falha ao gerar pré-visualização")
@@ -985,7 +1016,7 @@ class QRCodeGenerator:
                 extra={"event": "preview_error", "operation": "preview", "erro": str(exc)},
             )
             if not self._preview_backend_error_shown:
-                messagebox.showwarning("Pré-visualização", f"Não foi possível atualizar o preview:\n{exc}")
+                messagebox.showwarning(self._t("dialog.title.preview", "Pré-visualização"), self._t("preview.update_error", "Não foi possível atualizar o preview:\n{erro}", erro=exc))
                 self._preview_backend_error_shown = True
 
     def gerar_imagens(self, codigos, formato, destino, emitir_sucesso=True):
@@ -1148,8 +1179,8 @@ class QRCodeGenerator:
         self.progress_bar.stop()
         self.progress_bar.configure(mode="determinate", maximum=max(total, 1))
         self.progress_bar["value"] = 0
-        self.progress_label_var.set(f"Gerando 0/{total}...")
-        self.status_resumo_var.set(f"Processando {total} registro(s)...")
+        self.progress_label_var.set(self._t("progress.generating_start", "Gerando 0/{total}...", total=total))
+        self.status_resumo_var.set(self._t("status.processing_records", "Processando {total} registro(s)...", total=total))
         self._inicio_geracao_ts = time.perf_counter()
         self._total_planejado = total
         self._processados_atuais = 0
@@ -1186,7 +1217,9 @@ class QRCodeGenerator:
                     total = msg.get("total", 1)
                     self.progress_bar.configure(maximum=max(total, 1), style="App.Horizontal.TProgressbar")
                     self.progress_bar["value"] = atual
-                    self.progress_label_var.set(f"Gerando {atual}/{total}: {msg.get('codigo', '')}")
+                    self.progress_label_var.set(
+                        self._t("progress.generating_item", "Gerando {atual}/{total}: {codigo}", atual=atual, total=total, codigo=msg.get("codigo", ""))
+                    )
                     self._processados_atuais = atual
                     duracao_parcial = None
                     if self._inicio_geracao_ts is not None:
@@ -1200,28 +1233,37 @@ class QRCodeGenerator:
                     self._registrar_metricas_execucao("completed")
                     self._finalizar_job("completed")
                     self._finalizar_progresso(EstadoAplicacao.READY)
-                    self.status_resumo_var.set(f"Concluído com sucesso. Saída: {msg.get('caminho', '')}")
-                    messagebox.showinfo("Sucesso", msg.get("descricao", f"Arquivo(s) gerado(s) em: {msg.get('caminho', '')}"))
+                    self.status_resumo_var.set(self._t("status.completed_output", "Concluído com sucesso. Saída: {caminho}", caminho=msg.get("caminho", "")))
+                    messagebox.showinfo(
+                        self._t("message.success", "Sucesso"),
+                        msg.get(
+                            "descricao",
+                            self._t("info.generated_files_in", "Arquivo(s) gerado(s) em: {caminho}", caminho=msg.get("caminho", "")),
+                        ),
+                    )
                 elif msg["tipo"] == "erro":
                     self._atualizar_resumo_painel(caminho=self._ultimo_destino_saida)
                     self.progress_bar.configure(style="Error.Horizontal.TProgressbar")
                     self._registrar_metricas_execucao("error", erro=msg.get("msg", ""))
                     self._finalizar_job("error", erro=msg.get("msg", ""))
                     self._finalizar_progresso(EstadoAplicacao.ERROR)
-                    self.status_resumo_var.set("Falha durante a geração. Verifique os detalhes do erro.")
+                    self.status_resumo_var.set(self._t("status.generation_failed", "Falha durante a geração. Verifique os detalhes do erro."))
                     detalhe = msg.get("detalhe", "")
-                    erro_msg = msg.get("msg", "Falha durante a geração.")
+                    erro_msg = msg.get("msg", self._t("error.generation_failed", "Falha durante a geração."))
                     if detalhe:
-                        erro_msg = f"{erro_msg}\n\nDetalhes técnicos:\n{detalhe}"
-                    messagebox.showerror("Erro", erro_msg)
+                        erro_msg = self._t("error.technical_details", "{erro}\n\nDetalhes técnicos:\n{detalhe}", erro=erro_msg, detalhe=detalhe)
+                    messagebox.showerror(self._t("message.error", "Erro"), erro_msg)
                 elif msg["tipo"] == "cancelado":
                     self._atualizar_resumo_painel(caminho=self._ultimo_destino_saida)
                     self.progress_bar.configure(style="App.Horizontal.TProgressbar")
                     self._registrar_metricas_execucao("cancelled", erro=msg.get("msg", ""))
                     self._finalizar_job("cancelled", erro=msg.get("msg", ""))
                     self._finalizar_progresso(EstadoAplicacao.READY if self.df is not None else EstadoAplicacao.IDLE)
-                    self.status_resumo_var.set("Operação cancelada pelo usuário.")
-                    messagebox.showinfo("Cancelado", msg.get("msg", "Operação cancelada."))
+                    self.status_resumo_var.set(self._t("status.operation_cancelled", "Operação cancelada pelo usuário."))
+                    messagebox.showinfo(
+                        self._t("dialog.title.cancelled", "Cancelado"),
+                        msg.get("msg", self._t("info.operation_cancelled", "Operação cancelada.")),
+                    )
                 elif msg["tipo"] == "carregamento_sucesso":
                     self.progress_bar.stop()
                     self.progress_frame.pack_forget()
@@ -1242,9 +1284,12 @@ class QRCodeGenerator:
                     self.progress_frame.pack_forget()
                     self.column_combo.configure(state="disabled", values=[])
                     self._transicionar_estado(EstadoAplicacao.ERROR)
-                    self.status_resumo_var.set("Falha ao carregar arquivo. Tente novamente.")
+                    self.status_resumo_var.set(self._t("status.file_load_failed", "Falha ao carregar arquivo. Tente novamente."))
                     self._atualizar_resumo_painel(processado=0, ignorados=0, caminho="", job_id="")
-                    messagebox.showerror("Erro", f"Não foi possível abrir o arquivo: {msg.get('msg', '')}")
+                    messagebox.showerror(
+                        self._t("message.error", "Erro"),
+                        self._t("error.open_file_failed", "Não foi possível abrir o arquivo: {erro}", erro=msg.get("msg", "")),
+                    )
         except queue.Empty:
             pass
 
@@ -1271,20 +1316,24 @@ class QRCodeGenerator:
         if self.estado_atual in {EstadoAplicacao.LOADING, EstadoAplicacao.GENERATING, EstadoAplicacao.CANCELLING}:
             return
         if self.df is None or not self.column_combo.get():
-            messagebox.showwarning("Aviso", "Selecione um arquivo e uma coluna.")
+            messagebox.showwarning(self._t("message.warning", "Aviso"), self._t("warning.select_file_and_column", "Selecione um arquivo e uma coluna."))
             return
 
         try:
             cfg = self._build_config()
-            codigos, invalidos = self.gerar_codigos_uc.preparar_codigos(self.df, self.column_combo.get(), cfg)
+            codigos, invalidos = self.controller.preparar_codigos(self.df, self.column_combo.get(), cfg)
         except ValueError as exc:
-            messagebox.showwarning("Validação", str(exc))
+            messagebox.showwarning(self._t("dialog.title.validation", "Validação"), str(exc))
             return
 
         if invalidos:
             messagebox.showwarning(
-                "Validação",
-                f"{invalidos} registro(s) foram ignorados por não atenderem aos limites de entrada.",
+                self._t("dialog.title.validation", "Validação"),
+                self._t(
+                    "warning.invalid_records_ignored",
+                    "{invalidos} registro(s) foram ignorados por não atenderem aos limites de entrada.",
+                    invalidos=invalidos,
+                ),
             )
 
         formato = self.formato_saida.get()
@@ -1295,15 +1344,15 @@ class QRCodeGenerator:
             destino = filedialog.asksaveasfilename(defaultextension=".zip", filetypes=[("ZIP", "*.zip")])
         elif formato == "imprimir":
             if not sys.platform.startswith("win"):
-                messagebox.showwarning("Impressão", "A impressão integrada está disponível apenas no Windows.")
+                messagebox.showwarning(self._t("dialog.title.print", "Impressão"), self._t("print.windows_only", "A impressão integrada está disponível apenas no Windows."))
                 return
             try:
                 copias = int(self.copias_impressao.get())
             except Exception:
-                messagebox.showwarning("Impressão", "Informe uma quantidade de cópias válida.")
+                messagebox.showwarning(self._t("dialog.title.print", "Impressão"), self._t("print.invalid_copies", "Informe uma quantidade de cópias válida."))
                 return
             if copias < 1:
-                messagebox.showwarning("Impressão", "A quantidade de cópias deve ser maior que zero.")
+                messagebox.showwarning(self._t("dialog.title.print", "Impressão"), self._t("print.copies_gt_zero", "A quantidade de cópias deve ser maior que zero."))
                 return
             impressora = self.impressora_var.get().strip()
             destino = f"impressora:{impressora or 'padrão do sistema'}"
@@ -1322,33 +1371,39 @@ class QRCodeGenerator:
         if self.estado_atual in {EstadoAplicacao.LOADING, EstadoAplicacao.GENERATING, EstadoAplicacao.CANCELLING}:
             return
         if self.df is None or not self.column_combo.get():
-            messagebox.showwarning("Aviso", "Selecione um arquivo e uma coluna.")
+            messagebox.showwarning(self._t("message.warning", "Aviso"), self._t("warning.select_file_and_column", "Selecione um arquivo e uma coluna."))
             return
         if self.formato_saida.get() != "imprimir":
-            messagebox.showwarning("Impressão", "Selecione o formato de saída 'imprimir' para usar o teste.")
+            messagebox.showwarning(
+                self._t("dialog.title.print", "Impressão"),
+                self._t("print.select_output_print", "Selecione o formato de saída 'imprimir' para usar o teste."),
+            )
             return
         if not sys.platform.startswith("win"):
-            messagebox.showwarning("Impressão", "A impressão integrada está disponível apenas no Windows.")
+            messagebox.showwarning(self._t("dialog.title.print", "Impressão"), self._t("print.windows_only", "A impressão integrada está disponível apenas no Windows."))
             return
 
         try:
             copias = int(self.copias_impressao.get())
         except Exception:
-            messagebox.showwarning("Impressão", "Informe uma quantidade de cópias válida.")
+            messagebox.showwarning(self._t("dialog.title.print", "Impressão"), self._t("print.invalid_copies", "Informe uma quantidade de cópias válida."))
             return
         if copias < 1:
-            messagebox.showwarning("Impressão", "A quantidade de cópias deve ser maior que zero.")
+            messagebox.showwarning(self._t("dialog.title.print", "Impressão"), self._t("print.copies_gt_zero", "A quantidade de cópias deve ser maior que zero."))
             return
 
         try:
             cfg = self._build_config()
-            codigos, invalidos = self.gerar_codigos_uc.preparar_codigos(self.df, self.column_combo.get(), cfg)
+            codigos, invalidos = self.controller.preparar_codigos(self.df, self.column_combo.get(), cfg)
         except ValueError as exc:
-            messagebox.showwarning("Validação", str(exc))
+            messagebox.showwarning(self._t("dialog.title.validation", "Validação"), str(exc))
             return
 
         if not codigos:
-            messagebox.showwarning("Validação", "Nenhum código válido encontrado para impressão.")
+            messagebox.showwarning(
+                self._t("dialog.title.validation", "Validação"),
+                self._t("validation.no_valid_codes_for_print", "Nenhum código válido encontrado para impressão."),
+            )
             return
 
         codigo_teste = [codigos[0]]
