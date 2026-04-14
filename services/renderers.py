@@ -1,3 +1,5 @@
+import io
+
 import qrcode
 from PIL import Image
 
@@ -103,6 +105,44 @@ class BarcodeRenderer:
             img = renderPM.drawToPIL(desenho, dpi=self.dpi_padrao).convert("RGB")
             return ImageResizer.resize_with_ratio(img, width_px, height_px, cfg.keep_barcode_ratio)
         except Exception as exc:
-            raise RuntimeError(
-                "Geração de código de barras indisponível: habilite o backend renderPM do ReportLab."
-            ) from exc
+            try:
+                img = self._render_with_python_barcode(dado_limpo, modelo)
+                return ImageResizer.resize_with_ratio(img, width_px, height_px, cfg.keep_barcode_ratio)
+            except Exception as fallback_exc:
+                raise RuntimeError(
+                    "Geração de código de barras indisponível: habilite o backend renderPM do ReportLab "
+                    "ou instale suporte python-barcode com Pillow."
+                ) from fallback_exc
+
+    def _render_with_python_barcode(self, dado_limpo: str, modelo: str) -> Image.Image:
+        from barcode import get
+        from barcode.writer import ImageWriter
+
+        modelo_python_barcode = {
+            "ean13": "ean13",
+            "ean8": "ean8",
+            "upca": "upc",
+            "code39": "code39",
+            "code128": "code128",
+            "gs1128": "gs1_128",
+            "codabar": "codabar",
+            "interleaved2of5": "itf",
+        }.get(modelo)
+        if not modelo_python_barcode:
+            raise RuntimeError(f"Modelo de código de barras não suportado sem renderPM: {modelo}")
+
+        barcode_obj = get(modelo_python_barcode, dado_limpo, writer=ImageWriter())
+        buffer = io.BytesIO()
+        barcode_obj.write(
+            buffer,
+            options={
+                "module_width": 0.3,
+                "module_height": 15.0,
+                "quiet_zone": 1.0,
+                "font_size": 10,
+                "text_distance": 3.0,
+                "dpi": self.dpi_padrao,
+            },
+        )
+        buffer.seek(0)
+        return Image.open(buffer).convert("RGB")
