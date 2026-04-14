@@ -222,8 +222,19 @@ class QRCodeGenerator:
 
             self.barcode_disponivel = True
         except Exception:
-            self.barcode_disponivel = False
-            self.motivos_dependencias_indisponiveis.append("Código de barras indisponível (faltando backend renderPM).")
+            try:
+                from barcode import get as _barcode_get  # noqa: F401
+                from barcode.writer import ImageWriter as _barcode_image_writer  # noqa: F401
+
+                self.barcode_disponivel = True
+                self.motivos_dependencias_indisponiveis.append(
+                    "Código de barras com compatibilidade reduzida (renderPM ausente; usando fallback python-barcode)."
+                )
+            except Exception:
+                self.barcode_disponivel = False
+                self.motivos_dependencias_indisponiveis.append(
+                    "Código de barras indisponível (faltando renderPM e fallback python-barcode)."
+                )
 
     def _criar_interface(self):
         conteudo = ttk.Frame(self.root, padding=self.space_md)
