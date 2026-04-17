@@ -15,8 +15,11 @@ class DataImporter:
 
                 return pd.read_csv(caminho)
             except ImportError:
-                with open(caminho, newline="", encoding="utf-8-sig") as arquivo:
-                    return list(csv.DictReader(arquivo))
+                try:
+                    with open(caminho, newline="", encoding="utf-8-sig") as arquivo:
+                        return list(csv.DictReader(arquivo))
+                except (OSError, UnicodeDecodeError, ValueError) as exc:
+                    raise RuntimeError(self.formatar_excecao(exc, "Falha ao carregar CSV")) from exc
             except (OSError, UnicodeDecodeError, ValueError) as exc:
                 raise RuntimeError(self.formatar_excecao(exc, "Falha ao carregar CSV")) from exc
 

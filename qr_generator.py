@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import queue
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -216,14 +217,32 @@ class QRCodeGenerator:
             self.pdf_export_disponivel = False
             self.motivos_dependencias_indisponiveis.append("PDF/Impressão indisponível (faltando reportlab).")
 
+        cfg_teste_barcode = GeracaoConfig(
+            qr_width_cm=4.0,
+            qr_height_cm=4.0,
+            barcode_width_cm=8.0,
+            barcode_height_cm=3.0,
+            keep_qr_ratio=True,
+            keep_barcode_ratio=True,
+            foreground="black",
+            background="white",
+            tipo_codigo="barcode",
+            barcode_model="code128",
+            modo="texto",
+            prefixo="",
+            sufixo="",
+            max_codigos_por_lote=self.max_codigos_por_lote,
+            max_tamanho_dado=self.max_tamanho_dado,
+        )
         try:
-            from reportlab.graphics import renderPM as _render_pm  # noqa: F401
-            from reportlab.graphics.barcode import createBarcodeDrawing as _barcode_factory  # noqa: F401
-
+            amostra = self.controller.gerar_amostra_preview(cfg_teste_barcode)
+            _img = self.controller.gerar_imagem_obj(amostra, cfg_teste_barcode)
             self.barcode_disponivel = True
         except Exception:
             self.barcode_disponivel = False
-            self.motivos_dependencias_indisponiveis.append("Código de barras indisponível (faltando backend renderPM).")
+            self.motivos_dependencias_indisponiveis.append(
+                "Código de barras indisponível (nenhum backend funcional detectado)."
+            )
 
     def _criar_interface(self):
         conteudo = ttk.Frame(self.root, padding=self.space_md)
@@ -594,15 +613,17 @@ class QRCodeGenerator:
         self._atualizar_stepper_visual()
 
     def _ao_alterar_formato_saida(self, _e=None):
-        formatos_disponiveis = set(self.formato_combo.cget("values"))
+        formatos_disponiveis = set(self._obter_formatos_saida_disponiveis())
         if self.formato_saida.get() not in formatos_disponiveis:
             self.formato_saida.set("png")
             self.formato_combo.set("png")
+        self._ajustar_formato_incompativel(exibir_aviso=True)
         self._atualizar_controles_impressao()
         self._aplicar_estado_ui()
 
     def _ao_alterar_tipo_codigo(self):
         self._atualizar_controles_tipo_codigo()
+        self._ajustar_formato_incompativel(exibir_aviso=True)
         self.solicitar_atualizacao_preview()
 
     def _ao_alterar_modelo_barcode(self, _e=None):
@@ -629,13 +650,34 @@ class QRCodeGenerator:
         if not self.barcode_disponivel:
             self.tipo_codigo.set("qrcode")
 
-        formatos_disponiveis = ["png", "zip", "svg"]
-        if self.pdf_export_disponivel:
-            formatos_disponiveis = ["pdf", "png", "zip", "svg", "imprimir"]
+        formatos_disponiveis = self._obter_formatos_saida_disponiveis()
         self.formato_combo.configure(values=formatos_disponiveis)
         if self.formato_saida.get() not in formatos_disponiveis:
             self.formato_saida.set("png")
             self.formato_combo.set("png")
+
+    def _obter_formatos_saida_disponiveis(self):
+        formatos = ["png", "zip", "svg"]
+        if self.pdf_export_disponivel:
+            formatos = ["pdf", "png", "zip", "svg", "imprimir"]
+        if self.tipo_codigo.get() == "barcode":
+            formatos = [f for f in formatos if f != "svg"]
+        return formatos
+
+    def _ajustar_formato_incompativel(self, exibir_aviso: bool = False):
+        formatos_disponiveis = self._obter_formatos_saida_disponiveis()
+        self.formato_combo.configure(values=formatos_disponiveis)
+        if self.formato_saida.get() == "svg" and self.tipo_codigo.get() == "barcode":
+            self.formato_saida.set("png")
+            self.formato_combo.set("png")
+            if exibir_aviso:
+                messagebox.showwarning(
+                    self._t("dialog.title.invalid_format", "Formato incompatível"),
+                    self._t(
+                        "validation.svg_not_supported_for_barcode",
+                        "SVG não é suportado para código de barras. Formato ajustado para PNG.",
+                    ),
+                )
 
     def _listar_impressoras_windows(self):
         if not sys.platform.startswith("win"):
@@ -937,7 +979,7 @@ class QRCodeGenerator:
 
     def _build_config(self) -> GeracaoConfig:
         if self.tipo_codigo.get() == "barcode" and not self.barcode_disponivel:
-            raise ValueError("Código de barras indisponível neste ambiente (dependência renderPM ausente).")
+            raise ValueError("Código de barras indisponível neste ambiente (nenhum backend funcional detectado).")
         if self.formato_saida.get() in {"pdf", "imprimir"} and not self.pdf_export_disponivel:
             raise ValueError("Formato PDF/Impressão indisponível neste ambiente (dependência reportlab ausente).")
         return GeracaoConfig(
@@ -1068,8 +1110,8 @@ class QRCodeGenerator:
             if codigos_preview:
                 img = self._gerar_preview_documento(codigos_preview, cfg)
             else:
-                _ = self.controller.gerar_amostra_preview(cfg)
-                img = self._gerar_preview_documento(["123456789"], cfg)
+                amostra = self.controller.gerar_amostra_preview(cfg)
+                img = self._gerar_preview_documento([amostra], cfg)
 
             zoom_txt = self.preview_zoom.get().replace("%", "")
             zoom_factor = max(0.25, float(zoom_txt) / 100.0) if zoom_txt.isdigit() else 1.0
@@ -1217,9 +1259,12 @@ class QRCodeGenerator:
         except Exception as exc:
             raise RuntimeError("Quantidade de cópias inválida.") from exc
 
+        # Evita acúmulo indefinido de temporários de jobs antigos.
+        self._limpar_arquivos_temporarios_impressao(idade_min_segundos=900)
+
         impressora = self.impressora_var.get().strip()
         pasta_tmp = tempfile.mkdtemp(prefix="qr_print_")
-        self._arquivos_temporarios_impressao.append(pasta_tmp)
+        self._arquivos_temporarios_impressao.append((pasta_tmp, time.time()))
         self.gerar_imagens(codigos, "png", pasta_tmp, emitir_sucesso=False)
 
         arquivos_png = [
@@ -1250,19 +1295,51 @@ class QRCodeGenerator:
             }
         )
 
+    def _limpar_arquivos_temporarios_impressao(self, idade_min_segundos: int = 900):
+        agora = time.time()
+        restantes = []
+        for item in self._arquivos_temporarios_impressao:
+            if isinstance(item, tuple):
+                pasta_tmp, criado_em = item
+            else:
+                pasta_tmp, criado_em = item, 0
+
+            if not os.path.isdir(pasta_tmp):
+                continue
+
+            if (agora - float(criado_em)) < max(0, int(idade_min_segundos)):
+                restantes.append((pasta_tmp, criado_em))
+                continue
+
+            try:
+                shutil.rmtree(pasta_tmp)
+            except OSError:
+                # Mantém para nova tentativa posterior.
+                restantes.append((pasta_tmp, criado_em))
+
+        self._arquivos_temporarios_impressao = restantes
+
     def _imprimir_png_windows(self, caminho_imagem: str, impressora: str):
         if impressora:
             cmd = ["mspaint.exe", "/pt", caminho_imagem, impressora]
         else:
             cmd = ["mspaint.exe", "/p", caminho_imagem]
         try:
-            subprocess.run(cmd, check=True, timeout=30)
+            processo = subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
         except FileNotFoundError as exc:
             raise RuntimeError("Não foi possível localizar o mspaint.exe para realizar a impressão.") from exc
-        except subprocess.CalledProcessError as exc:
-            raise RuntimeError(f"Falha ao enviar imagem para impressão (código {exc.returncode}).") from exc
-        except subprocess.TimeoutExpired as exc:
-            raise RuntimeError("Tempo excedido ao enviar imagem para a impressora.") from exc
+        except OSError as exc:
+            raise RuntimeError(self._formatar_excecao(exc, "Falha ao iniciar impressão via mspaint")) from exc
+
+        # Não aguarda o término: o MSPaint pode permanecer aberto aguardando o usuário.
+        # O objetivo aqui é apenas disparar o comando de impressão sem bloquear a thread.
+        if processo.poll() not in (None, 0):
+            raise RuntimeError(f"Falha ao enviar imagem para impressão (código {processo.returncode}).")
 
     def _iniciar_progresso(self, total, invalidos=0, destino="", formato=""):
         self.cancelar_evento.clear()
