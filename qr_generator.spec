@@ -1,11 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+# Canonical PyInstaller spec (base). Keep this file in sync with
+# "QR CODER.spec", which is only a branding variant for the executable name.
+COMMON_DATAS = [
+    ('icon.ico', '.'),
+    ('locales', 'locales'),
+    ('logs/*.db', 'logs'),
+]
 
 a = Analysis(
     ['qr_generator.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=COMMON_DATAS,
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -35,4 +42,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=['icon.ico'],
 )
