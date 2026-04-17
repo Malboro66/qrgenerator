@@ -1,11 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+# Branding variant. Keep aligned with "qr_generator.spec" for analysis inputs,
+# bundled data files, and runtime resources.
+COMMON_DATAS = [
+    ('icon.ico', '.'),
+    ('locales', 'locales'),
+    ('logs/*.db', 'logs'),
+]
 
 a = Analysis(
     ['qr_generator.py'],
     pathex=[],
     binaries=[],
-    datas=[('icon.ico', '.')],
+    datas=COMMON_DATAS,
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
