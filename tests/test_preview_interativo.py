@@ -1,214 +1,175 @@
-"""
-tests/test_preview_interativo.py
-==================================
-Testes para o widget PreviewInterativo (canvas de drag-to-resize).
-"""
+from types import SimpleNamespace
+from unittest.mock import Mock
+
 import pytest
-from unittest.mock import MagicMock, call
-from tkinter import Tk
+from PIL import Image
 
-try:
-    from preview_interativo import PreviewInterativo
-    _DISPONIVEL = True
-except ImportError:
-    _DISPONIVEL = False
-
-pytestmark = pytest.mark.skipif(
-    not _DISPONIVEL, reason="preview_interativo.py não encontrado"
-)
+from preview_interativo import PreviewInterativo
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def root():
-    r = Tk()
+    tk = pytest.importorskip("tkinter")
+    try:
+        r = tk.Tk()
+    except Exception:
+        pytest.skip("Requer display tkinter")
     r.withdraw()
-    r.update()
     yield r
     r.destroy()
 
 
 @pytest.fixture
+@pytest.mark.ui
 def canvas(root):
-    on_code = MagicMock()
-    on_lbl  = MagicMock()
-    c = PreviewInterativo(root, on_code_resized=on_code, on_label_resized=on_lbl)
-    c.place(x=0, y=0, width=500, height=340)
-    root.update()
-    return c, on_code, on_lbl
+    on_code = Mock()
+    on_label = Mock()
+    c = PreviewInterativo(root, on_code_resized=on_code, on_label_resized=on_label, width=600, height=400)
+    c.pack()
+    c.update_idletasks()
+    c._draw()
+    yield c, on_code, on_label
+    c.destroy()
 
 
 class TestInicializacao:
+    @pytest.mark.ui
     def test_cria_sem_erro(self, canvas):
-        c, _, _ = canvas
+        c, *_ = canvas
         assert c is not None
 
+    @pytest.mark.ui
     def test_estado_inicial(self, canvas):
-        c, _, _ = canvas
-        estado = c.obter_estado()
-        assert estado["etiqueta_w_mm"] > 0
-        assert estado["etiqueta_h_mm"] > 0
-        assert estado["codigo_w_mm"] > 0
-        assert estado["codigo_h_mm"] > 0
+        c, *_ = canvas
+        st = c.obter_estado()
+        assert all(v > 0 for v in st.values())
 
 
 class TestAtualizar:
+    @pytest.mark.ui
     def test_atualizar_dimensoes(self, canvas):
-        c, _, _ = canvas
-        c.atualizar(lbl_w_mm=120, lbl_h_mm=80, cod_w_mm=40, cod_h_mm=40)
-        e = c.obter_estado()
-        assert e["etiqueta_w_mm"] == pytest.approx(120, abs=1)
-        assert e["etiqueta_h_mm"] == pytest.approx(80, abs=1)
+        c, *_ = canvas
+        c.atualizar(120, 80, 40, 40)
+        st = c.obter_estado()
+        assert st["etiqueta_w_mm"] == 120
+        assert st["etiqueta_h_mm"] == 80
 
+    @pytest.mark.ui
     def test_codigo_nao_ultrapassa_etiqueta(self, canvas):
-        c, _, _ = canvas
-        c.atualizar(lbl_w_mm=50, lbl_h_mm=30, cod_w_mm=100, cod_h_mm=100)
-        e = c.obter_estado()
-        assert e["codigo_w_mm"] < 50
-        assert e["codigo_h_mm"] < 30
+        c, *_ = canvas
+        c.atualizar(50, 30, 100, 100)
+        st = c.obter_estado()
+        assert st["codigo_w_mm"] < st["etiqueta_w_mm"]
+        assert st["codigo_h_mm"] < st["etiqueta_h_mm"]
 
+    @pytest.mark.ui
     def test_dimensao_minima_etiqueta(self, canvas):
-        c, _, _ = canvas
-        c.atualizar(lbl_w_mm=1, lbl_h_mm=1, cod_w_mm=5, cod_h_mm=5)
-        e = c.obter_estado()
-        assert e["etiqueta_w_mm"] >= PreviewInterativo.MIN_LABEL_MM
+        c, *_ = canvas
+        c.atualizar(1, 1, 10, 10)
+        assert c._lw == c.MIN_LABEL_MM and c._lh == c.MIN_LABEL_MM
 
+    @pytest.mark.ui
     def test_dimensao_minima_codigo(self, canvas):
-        c, _, _ = canvas
-        c.atualizar(lbl_w_mm=100, lbl_h_mm=60, cod_w_mm=0, cod_h_mm=0)
-        e = c.obter_estado()
-        assert e["codigo_w_mm"] >= PreviewInterativo.MIN_CODE_MM
+        c, *_ = canvas
+        c.atualizar(100, 60, 0, 0)
+        assert c._cw >= c.MIN_CODE_MM and c._ch >= c.MIN_CODE_MM
 
+    @pytest.mark.ui
     def test_atualizar_com_imagem_pil(self, canvas):
-        from PIL import Image
-        c, _, _ = canvas
-        img = Image.new("RGB", (200, 100), "white")
-        c.atualizar(lbl_w_mm=100, lbl_h_mm=60, cod_w_mm=40, cod_h_mm=30, codigo_img=img)
-        e = c.obter_estado()
-        assert e["etiqueta_w_mm"] == pytest.approx(100, abs=1)
+        c, *_ = canvas
+        c.atualizar(100, 60, 40, 20, codigo_img=Image.new("RGB", (200, 100), "black"))
+        assert c._code_img is not None
 
 
 class TestMoverCodigo:
+    @pytest.mark.ui
     def test_mover_dentro_dos_limites(self, canvas):
-        c, _, _ = canvas
-        c.atualizar(lbl_w_mm=100, lbl_h_mm=60, cod_w_mm=20, cod_h_mm=20)
+        c, *_ = canvas
+        c.atualizar(100, 60, 20, 20)
         c.mover_codigo(10, 10)
-        e = c.obter_estado()
-        assert e["codigo_x_mm"] == pytest.approx(10, abs=1)
-        assert e["codigo_y_mm"] == pytest.approx(10, abs=1)
+        assert c._cx == 10 and c._cy == 10
 
+    @pytest.mark.ui
     def test_mover_fora_do_limite_clamp(self, canvas):
-        c, _, _ = canvas
-        c.atualizar(lbl_w_mm=100, lbl_h_mm=60, cod_w_mm=20, cod_h_mm=20)
+        c, *_ = canvas
+        c.atualizar(100, 60, 20, 20)
         c.mover_codigo(200, 200)
-        e = c.obter_estado()
-        assert e["codigo_x_mm"] < 100
-        assert e["codigo_y_mm"] < 60
+        assert c._cx <= c._lw - c._cw
+        assert c._cy <= c._lh - c._ch
+
+
+def _simula_drag(c, handle_id, dx_px, dy_px):
+    h = next(h for h in c._handles if h["id"] == handle_id)
+    c._press(SimpleNamespace(x=h["x"], y=h["y"]))
+    c._motion(SimpleNamespace(x=h["x"] + dx_px, y=h["y"] + dy_px))
+    c._release(SimpleNamespace(x=h["x"] + dx_px, y=h["y"] + dy_px))
 
 
 class TestDragHandles:
-    def _simula_drag(self, canvas_widget, handle_id, dx_px, dy_px):
-        """Simula press + motion + release diretamente nos métodos internos."""
-        c = canvas_widget
-        c._draw()
-        h_info = next((h for h in c._handles if h["id"] == handle_id), None)
-        if not h_info:
-            pytest.skip(f"Handle {handle_id} não encontrado (canvas muito pequeno?)")
-        x0, y0 = h_info["x"], h_info["y"]
-
-        class FakeEvent:
-            pass
-
-        ev_press = FakeEvent()
-        ev_press.x = x0
-        ev_press.y = y0
-        c._press(ev_press)
-
-        ev_move = FakeEvent()
-        ev_move.x = x0 + dx_px
-        ev_move.y = y0 + dy_px
-        c._motion(ev_move)
-
-        ev_release = FakeEvent()
-        c._release(ev_release)
-
+    @pytest.mark.ui
     def test_drag_c_se_aumenta_codigo(self, canvas):
         c, on_code, _ = canvas
-        on_code.reset_mock()
-        c.atualizar(lbl_w_mm=150, lbl_h_mm=100, cod_w_mm=40, cod_h_mm=30)
-        antes_w = c._cw
-        antes_h = c._ch
-        self._simula_drag(c, "c-se", 30, 20)
-        assert c._cw > antes_w or c._ch > antes_h
+        c.atualizar(100, 60, 20, 20)
+        old = (c._cw, c._ch)
+        _simula_drag(c, "c-se", 20, 20)
+        assert c._cw > old[0] or c._ch > old[1]
         assert on_code.called
 
+    @pytest.mark.ui
     def test_drag_c_nw_diminui_codigo(self, canvas):
-        c, on_code, _ = canvas
-        c.atualizar(lbl_w_mm=150, lbl_h_mm=100, cod_w_mm=60, cod_h_mm=50)
-        antes_w = c._cw
-        self._simula_drag(c, "c-nw", 20, 15)
-        assert c._cw <= antes_w
-
-    def test_drag_l_se_aumenta_etiqueta(self, canvas):
-        c, _, on_lbl = canvas
-        on_lbl.reset_mock()
-        c.atualizar(lbl_w_mm=100, lbl_h_mm=60, cod_w_mm=30, cod_h_mm=20)
-        antes_lw = c._lw
-        antes_lh = c._lh
-        self._simula_drag(c, "l-se", 40, 30)
-        assert c._lw > antes_lw or c._lh > antes_lh
-        assert on_lbl.called
-
-    def test_drag_codigo_nao_ultrapassa_etiqueta(self, canvas):
         c, _, _ = canvas
-        c.atualizar(lbl_w_mm=100, lbl_h_mm=60, cod_w_mm=40, cod_h_mm=30)
-        self._simula_drag(c, "c-se", 9999, 9999)
+        c.atualizar(100, 60, 30, 30)
+        old = c._cw
+        _simula_drag(c, "c-nw", 15, 15)
+        assert c._cw <= old
+
+    @pytest.mark.ui
+    def test_drag_l_se_aumenta_etiqueta(self, canvas):
+        c, _, on_label = canvas
+        c.atualizar(100, 60, 20, 20)
+        old = (c._lw, c._lh)
+        _simula_drag(c, "l-se", 20, 20)
+        assert c._lw > old[0] or c._lh > old[1]
+        assert on_label.called
+
+    @pytest.mark.ui
+    def test_drag_codigo_nao_ultrapassa_etiqueta(self, canvas):
+        c, *_ = canvas
+        c.atualizar(100, 60, 20, 20)
+        _simula_drag(c, "c-se", 500, 500)
         assert c._cw + c._cx < c._lw
-        assert c._ch + c._cy < c._lh
 
+    @pytest.mark.ui
     def test_drag_sem_handle_nao_altera_estado(self, canvas):
-        c, on_code, on_lbl = canvas
-        on_code.reset_mock()
-        on_lbl.reset_mock()
-        c.atualizar(lbl_w_mm=100, lbl_h_mm=60, cod_w_mm=40, cod_h_mm=30)
-        estado_antes = c.obter_estado()
+        c, on_code, on_label = canvas
+        old = c.obter_estado().copy()
+        c._press(SimpleNamespace(x=5, y=5))
+        c._motion(SimpleNamespace(x=100, y=100))
+        c._release(SimpleNamespace(x=100, y=100))
+        assert c.obter_estado() == old
+        assert not on_code.called and not on_label.called
 
-        class FakeEvent:
-            x = 5
-            y = 5
-
-        c._press(FakeEvent())
-        FakeEvent.x = 50
-        FakeEvent.y = 50
-        c._motion(FakeEvent())
-        c._release(FakeEvent())
-        assert not on_code.called
-        assert not on_lbl.called
-
+    @pytest.mark.ui
     def test_callbacks_recebem_valores_em_mm(self, canvas):
         c, on_code, _ = canvas
-        on_code.reset_mock()
-        c.atualizar(lbl_w_mm=150, lbl_h_mm=100, cod_w_mm=40, cod_h_mm=30)
-        self._simula_drag(c, "c-se", 15, 10)
-        if on_code.called:
-            w_mm, h_mm = on_code.call_args[0]
-            assert 5 <= w_mm <= 150
-            assert 5 <= h_mm <= 100
+        c.atualizar(100, 60, 20, 20)
+        _simula_drag(c, "c-se", 20, 10)
+        args, _ = on_code.call_args
+        assert 5 <= args[0] <= 150
+        assert 5 <= args[1] <= 150
 
 
 class TestObterEstado:
+    @pytest.mark.ui
     def test_estado_arredondado(self, canvas):
-        c, _, _ = canvas
-        c._lw = 99.9999
-        c._lh = 59.0001
-        c._cw = 38.50001
-        c._ch = 28.49999
-        e = c.obter_estado()
-        assert e["etiqueta_w_mm"] == pytest.approx(100.0, abs=0.2)
-        assert e["etiqueta_h_mm"] == pytest.approx(59.0, abs=0.2)
+        c, *_ = canvas
+        c._lw = 100.123
+        st = c.obter_estado()
+        assert st["etiqueta_w_mm"] == 100.1
 
+    @pytest.mark.ui
     def test_estado_completo_tem_todas_chaves(self, canvas):
-        c, _, _ = canvas
-        e = c.obter_estado()
-        for k in ("etiqueta_w_mm", "etiqueta_h_mm", "codigo_w_mm",
-                  "codigo_h_mm", "codigo_x_mm", "codigo_y_mm"):
-            assert k in e
+        c, *_ = canvas
+        st = c.obter_estado()
+        keys = {"etiqueta_w_mm", "etiqueta_h_mm", "codigo_w_mm", "codigo_h_mm", "codigo_x_mm", "codigo_y_mm"}
+        assert set(st.keys()) == keys

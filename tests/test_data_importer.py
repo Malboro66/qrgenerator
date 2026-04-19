@@ -1,13 +1,10 @@
-"""
-tests/test_data_importer.py
-============================
-Testes unitários para DataImporter — carregamento de CSV e Excel.
-"""
 import csv
-import os
 import tempfile
+from pathlib import Path
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import patch, MagicMock
+
 from services.data_importer import DataImporter
 
 
@@ -16,141 +13,126 @@ def imp():
     return DataImporter()
 
 
-def _csv(dados: dict, encoding="utf-8") -> str:
-    fd, path = tempfile.mkstemp(suffix=".csv")
-    with os.fdopen(fd, "w", newline="", encoding=encoding) as f:
-        campos = list(dados.keys())
-        w = csv.DictWriter(f, fieldnames=campos)
-        w.writeheader()
-        n = max(len(v) for v in dados.values())
-        for i in range(n):
-            w.writerow({k: dados[k][i] for k in campos})
-    return path
+def _csv(dados, encoding="utf-8"):
+    fd, caminho = tempfile.mkstemp(suffix=".csv")
+    Path(caminho).unlink(missing_ok=True)
+    cols = list(dados.keys())
+    rows = zip(*[dados[c] for c in cols])
+    with open(caminho, "w", newline="", encoding=encoding) as f:
+        w = csv.writer(f)
+        w.writerow(cols)
+        for row in rows:
+            w.writerow(row)
+    return caminho
 
 
-def _xlsx(dados: dict) -> str:
-    try:
-        import openpyxl
-    except ImportError:
-        pytest.skip("openpyxl não instalado")
-    fd, path = tempfile.mkstemp(suffix=".xlsx")
-    os.close(fd)
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    campos = list(dados.keys())
-    ws.append(campos)
-    n = max(len(v) for v in dados.values())
-    for i in range(n):
-        ws.append([dados[k][i] for k in campos])
-    wb.save(path)
-    return path
+def _xlsx(dados):
+    pytest.importorskip("openpyxl")
+    pd = pytest.importorskip("pandas")
+    fd, caminho = tempfile.mkstemp(suffix=".xlsx")
+    Path(caminho).unlink(missing_ok=True)
+    pd.DataFrame(dados).to_excel(caminho, index=False)
+    return caminho
 
 
 class TestCarregarCSV:
     def test_csv_simples(self, imp):
-        path = _csv({"id": [1, 2], "nome": ["a", "b"]})
+        caminho = _csv({"id": [1, 2], "nome": ["a", "b"]})
         try:
-            tb = imp.carregar_tabela(path)
-            cols = DataImporter.obter_colunas(tb)
+            tb = imp.carregar_tabela(caminho)
+            cols = imp.obter_colunas(tb)
             assert "id" in cols
             assert "nome" in cols
         finally:
-            os.unlink(path)
+            Path(caminho).unlink(missing_ok=True)
 
     def test_csv_utf8_bom(self, imp):
-        path = _csv({"código": ["X1", "X2"]}, encoding="utf-8-sig")
+        caminho = _csv({"código": ["A", "B"]}, encoding="utf-8-sig")
         try:
-            tb = imp.carregar_tabela(path)
-            cols = DataImporter.obter_colunas(tb)
-            assert "código" in cols
+            tb = imp.carregar_tabela(caminho)
+            assert "código" in imp.obter_colunas(tb)
         finally:
-            os.unlink(path)
+            Path(caminho).unlink(missing_ok=True)
 
     def test_csv_inexistente_lanca_runtime(self, imp):
         with pytest.raises(RuntimeError, match="Falha ao carregar CSV"):
-            imp.carregar_tabela("/caminho/que/nao/existe.csv")
+            imp.carregar_tabela("/tmp/nao_existe_abc123.csv")
 
     def test_csv_vazio_retorna_lista_vazia_ou_df(self, imp):
-        fd, path = tempfile.mkstemp(suffix=".csv")
+        caminho = _csv({"col1": []})
         try:
-            with os.fdopen(fd, "w") as f:
-                f.write("col1,col2\n")
-            tb = imp.carregar_tabela(path)
-            vals = DataImporter.obter_valores_coluna(tb, "col1")
+            tb = imp.carregar_tabela(caminho)
+            vals = imp.obter_valores_coluna(tb, "col1")
             assert vals == []
         finally:
-            os.unlink(path)
+            Path(caminho).unlink(missing_ok=True)
 
     def test_csv_fallback_sem_pandas(self, imp):
-        path = _csv({"chave": ["A", "B", "C"]})
+        caminho = _csv({"col": ["x", "y"]})
         try:
             with patch.dict("sys.modules", {"pandas": None}):
-                tb = imp.carregar_tabela(path)
-                vals = DataImporter.obter_valores_coluna(tb, "chave")
-                assert vals == ["A", "B", "C"]
+                tb = imp.carregar_tabela(caminho)
+            vals = imp.obter_valores_coluna(tb, "col")
+            assert vals == ["x", "y"]
         finally:
-            os.unlink(path)
+            Path(caminho).unlink(missing_ok=True)
 
 
 class TestCarregarXLSX:
     def test_xlsx_simples(self, imp):
-        path = _xlsx({"sku": ["001", "002"], "desc": ["Item A", "Item B"]})
+        caminho = _xlsx({"sku": ["A1"], "desc": ["item"]})
         try:
-            tb = imp.carregar_tabela(path)
-            cols = DataImporter.obter_colunas(tb)
-            assert "sku" in cols
+            tb = imp.carregar_tabela(caminho)
+            assert "sku" in imp.obter_colunas(tb)
         finally:
-            os.unlink(path)
+            Path(caminho).unlink(missing_ok=True)
 
     def test_xlsx_inexistente_lanca_runtime(self, imp):
         with pytest.raises(RuntimeError, match="Falha ao carregar Excel"):
-            imp.carregar_tabela("/nao/existe.xlsx")
+            imp.carregar_tabela("/tmp/nao_existe_abc123.xlsx")
 
     def test_xlsx_sem_pandas_lanca_runtime_com_mensagem_clara(self, imp):
-        with patch.dict("sys.modules", {"pandas": None}):
-            with pytest.raises(RuntimeError, match="openpyxl"):
-                imp.carregar_tabela("/qualquer.xlsx")
+        caminho = _xlsx({"a": [1]})
+        try:
+            with patch.dict("sys.modules", {"pandas": None}):
+                with pytest.raises(RuntimeError, match="openpyxl"):
+                    imp.carregar_tabela(caminho)
+        finally:
+            Path(caminho).unlink(missing_ok=True)
 
 
 class TestObterColunas:
-    def test_tabela_none(self):
-        assert DataImporter.obter_colunas(None) == []
+    def test_tabela_none(self, imp):
+        assert imp.obter_colunas(None) == []
 
-    def test_dataframe(self):
+    def test_dataframe(self, imp):
         pd = pytest.importorskip("pandas")
-        df = pd.DataFrame({"a": [1], "b": [2]})
-        assert DataImporter.obter_colunas(df) == ["a", "b"]
+        tb = pd.DataFrame({"a": [1], "b": [2]})
+        assert imp.obter_colunas(tb) == ["a", "b"]
 
-    def test_lista_de_dicts(self):
-        dados = [{"x": 1, "y": 2}]
-        assert DataImporter.obter_colunas(dados) == ["x", "y"]
+    def test_lista_de_dicts(self, imp):
+        assert imp.obter_colunas([{"x": 1, "y": 2}]) == ["x", "y"]
 
-    def test_lista_vazia(self):
-        assert DataImporter.obter_colunas([]) == []
+    def test_lista_vazia(self, imp):
+        assert imp.obter_colunas([]) == []
 
 
 class TestObterValoresColuna:
-    def test_coluna_com_nulos_ignorados(self):
+    def test_coluna_com_nulos_ignorados(self, imp):
         pd = pytest.importorskip("pandas")
-        import numpy as np
-        df = pd.DataFrame({"v": ["a", None, "c", np.nan]})
-        vals = DataImporter.obter_valores_coluna(df, "v")
-        assert vals == ["a", "c"]
+        tb = pd.DataFrame({"c": ["a", None, "c", float("nan")]})
+        assert imp.obter_valores_coluna(tb, "c") == ["a", "c"]
 
-    def test_lista_de_dicts(self):
-        dados = [{"k": "1"}, {"k": "2"}, {"k": None}]
-        vals = DataImporter.obter_valores_coluna(dados, "k")
-        assert vals == ["1", "2"]
+    def test_lista_de_dicts(self, imp):
+        tb = [{"k": 1}, {"k": 2}, {"k": None}]
+        assert imp.obter_valores_coluna(tb, "k") == ["1", "2"]
 
-    def test_coluna_inexistente_lista(self):
-        dados = [{"a": "x"}]
-        vals = DataImporter.obter_valores_coluna(dados, "b")
-        assert vals == []
+    def test_coluna_inexistente_lista(self, imp):
+        tb = [{"a": 1}]
+        assert imp.obter_valores_coluna(tb, "b") == []
 
 
 class TestFormatarExcecao:
-    def test_mensagem_formatada(self):
-        exc = ValueError("detalhe do erro")
-        msg = DataImporter.formatar_excecao(exc, "contexto")
-        assert "contexto" in msg
-        assert "detalhe do erro" in msg
+    def test_mensagem_formatada(self, imp):
+        out = imp.formatar_excecao(ValueError("detalhe"), "contexto")
+        assert "contexto" in out and "detalhe" in out
