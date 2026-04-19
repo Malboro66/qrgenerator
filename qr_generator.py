@@ -22,6 +22,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from app_controller import AppController
 from models.geracao_config import GeracaoConfig
+from preview_interativo import PreviewInterativo
 
 # Equivalentes do ReportLab para evitar dependência em tempo de import.
 MM_TO_POINTS = 72 / 25.4
@@ -73,6 +74,14 @@ class EstadoAplicacao(Enum):
 class QRCodeGenerator:
     """Aplicativo desktop para geração de QR Codes e códigos de barras."""
 
+    _PRESETS_ETIQUETA = {
+        "A4 (210×297 mm)": (210, 297),
+        "Etiqueta 100×60 mm": (100, 60),
+        "Etiqueta 80×40 mm": (80, 40),
+        "Etiqueta 60×30 mm": (60, 30),
+        "Etiqueta 50×25 mm": (50, 25),
+    }
+
     def __init__(self, root: tk.Tk, controller: AppController | None = None):
         self.root = root
         self.root.title("")
@@ -99,6 +108,8 @@ class QRCodeGenerator:
         self.qr_height_cm = tk.StringVar(value="4.0")
         self.barcode_width_cm = tk.StringVar(value="8.0")
         self.barcode_height_cm = tk.StringVar(value="3.0")
+        self.etiqueta_width_mm = tk.StringVar(value="100")
+        self.etiqueta_height_mm = tk.StringVar(value="60")
         self.keep_qr_ratio = tk.BooleanVar(value=True)
         self.keep_barcode_ratio = tk.BooleanVar(value=True)
         self.qr_foreground_color = tk.StringVar(value="black")
@@ -312,6 +323,45 @@ class QRCodeGenerator:
             spin.bind("<FocusOut>", lambda _e: self.solicitar_atualizacao_preview())
             spin.bind("<KeyRelease>", lambda _e: self.solicitar_atualizacao_preview())
 
+        ttk.Label(self.config_frame, text="Etiqueta (mm LxA):").grid(row=8, column=0, sticky="e", padx=(0, 5), pady=5)
+        self.etq_w_spin = ttk.Spinbox(
+            self.config_frame,
+            from_=20.0,
+            to=400.0,
+            increment=1,
+            textvariable=self.etiqueta_width_mm,
+            width=6,
+            command=self.solicitar_atualizacao_preview,
+            style="App.TSpinbox",
+        )
+        self.etq_w_spin.grid(row=8, column=1, padx=(0, 2), pady=5, sticky="w")
+        self.etq_h_spin = ttk.Spinbox(
+            self.config_frame,
+            from_=20.0,
+            to=400.0,
+            increment=1,
+            textvariable=self.etiqueta_height_mm,
+            width=6,
+            command=self.solicitar_atualizacao_preview,
+            style="App.TSpinbox",
+        )
+        self.etq_h_spin.grid(row=8, column=2, padx=(2, 5), pady=5, sticky="w")
+        for spin in (self.etq_w_spin, self.etq_h_spin):
+            spin.bind("<FocusOut>", lambda _e: self.solicitar_atualizacao_preview())
+            spin.bind("<KeyRelease>", lambda _e: self.solicitar_atualizacao_preview())
+
+        self.etiqueta_preset = tk.StringVar(value="Personalizada")
+        self.etiqueta_preset_combo = ttk.Combobox(
+            self.config_frame,
+            textvariable=self.etiqueta_preset,
+            state="readonly",
+            width=22,
+            style="App.TCombobox",
+            values=["Personalizada", *self._PRESETS_ETIQUETA.keys()],
+        )
+        self.etiqueta_preset_combo.grid(row=8, column=3, padx=5, pady=5, sticky="w")
+        self.etiqueta_preset_combo.bind("<<ComboboxSelected>>", self._ao_selecionar_preset_etiqueta)
+
         ttk.Label(self.config_frame, text=self._t("label.type", "Tipo:")).grid(row=3, column=0, sticky="e", padx=(0, 5), pady=5)
         self.tipo_qr_radio = ttk.Radiobutton(
             self.config_frame,
@@ -518,8 +568,13 @@ class QRCodeGenerator:
         self.preview_escala_var = tk.StringVar(value="Escala visual: 100%")
         ttk.Label(preview_toolbar, textvariable=self.preview_escala_var, style="SectionHint.TLabel").pack(side="right")
 
-        self.preview_label = ttk.Label(preview_frame)
-        self.preview_label.pack(expand=True)
+        self.preview_canvas = PreviewInterativo(
+            preview_frame,
+            on_code_resized=self._ao_redimensionar_codigo_por_drag,
+            on_label_resized=self._ao_redimensionar_etiqueta_por_drag,
+            height=340,
+        )
+        self.preview_canvas.pack(expand=True, fill="both")
 
         self.progress_frame = ttk.Frame(self.acao_status_frame, padding=(0, 4, 0, 0))
         self.progress_frame.pack(fill="x")
@@ -977,11 +1032,40 @@ class QRCodeGenerator:
         except (TypeError, ValueError) as exc:
             raise ValueError(self._t("validation.invalid_number", "Valor inválido para {campo}: {valor}", campo=nome_campo, valor=valor)) from exc
 
+    def _ao_selecionar_preset_etiqueta(self, _e=None):
+        preset = self.etiqueta_preset.get()
+        if preset in self._PRESETS_ETIQUETA:
+            largura, altura = self._PRESETS_ETIQUETA[preset]
+            self.etiqueta_width_mm.set(str(largura))
+            self.etiqueta_height_mm.set(str(altura))
+            self.solicitar_atualizacao_preview()
+
+    def _ao_redimensionar_codigo_por_drag(self, w_mm: float, h_mm: float):
+        if self.tipo_codigo.get() == "barcode":
+            self.barcode_width_cm.set(f"{w_mm / 10:.2f}")
+            self.barcode_height_cm.set(f"{h_mm / 10:.2f}")
+        else:
+            self.qr_width_cm.set(f"{w_mm / 10:.2f}")
+            self.qr_height_cm.set(f"{h_mm / 10:.2f}")
+
+    def _ao_redimensionar_etiqueta_por_drag(self, w_mm: float, h_mm: float):
+        self.etiqueta_width_mm.set(f"{w_mm:.0f}")
+        self.etiqueta_height_mm.set(f"{h_mm:.0f}")
+        self.etiqueta_preset.set("Personalizada")
+
     def _build_config(self) -> GeracaoConfig:
         if self.tipo_codigo.get() == "barcode" and not self.barcode_disponivel:
             raise ValueError("Código de barras indisponível neste ambiente (nenhum backend funcional detectado).")
         if self.formato_saida.get() in {"pdf", "imprimir"} and not self.pdf_export_disponivel:
             raise ValueError("Formato PDF/Impressão indisponível neste ambiente (dependência reportlab ausente).")
+        etiqueta_width_mm = max(
+            20.0,
+            self._parse_float_input(self.etiqueta_width_mm.get() or "100", self._t("labels.etiqueta_width", "Largura da etiqueta (mm)")),
+        )
+        etiqueta_height_mm = max(
+            20.0,
+            self._parse_float_input(self.etiqueta_height_mm.get() or "60", self._t("labels.etiqueta_height", "Altura da etiqueta (mm)")),
+        )
         return GeracaoConfig(
             qr_width_cm=self._parse_float_input(self.qr_width_cm.get(), self._t("labels.qr_width", "Largura QR (cm)")),
             qr_height_cm=self._parse_float_input(self.qr_height_cm.get(), self._t("labels.qr_height", "Altura QR (cm)")),
@@ -996,6 +1080,8 @@ class QRCodeGenerator:
             modo=self.modo.get(),
             prefixo=self.prefixo_numerico.get(),
             sufixo=self.sufixo_numerico.get(),
+            etiqueta_width_mm=etiqueta_width_mm,
+            etiqueta_height_mm=etiqueta_height_mm,
             max_codigos_por_lote=self.max_codigos_por_lote,
             max_tamanho_dado=self.max_tamanho_dado,
         )
@@ -1106,35 +1192,38 @@ class QRCodeGenerator:
     def atualizar_preview(self):
         try:
             cfg = self._build_config()
-            codigos_preview = self._extrair_codigos_preview()
-            if codigos_preview:
-                img = self._gerar_preview_documento(codigos_preview, cfg)
+            etq_w = max(20.0, float(self.etiqueta_width_mm.get() or "100"))
+            etq_h = max(20.0, float(self.etiqueta_height_mm.get() or "60"))
+
+            if cfg.tipo_codigo == "barcode":
+                cod_w_mm = cfg.barcode_width_cm * 10
+                cod_h_mm = cfg.barcode_height_cm * 10
             else:
-                amostra = self.controller.gerar_amostra_preview(cfg)
-                img = self._gerar_preview_documento([amostra], cfg)
+                cod_w_mm = cfg.qr_width_cm * 10
+                cod_h_mm = cfg.qr_height_cm * 10
 
-            zoom_txt = self.preview_zoom.get().replace("%", "")
-            zoom_factor = max(0.25, float(zoom_txt) / 100.0) if zoom_txt.isdigit() else 1.0
-            self.preview_escala_var.set(f"Escala visual: {int(zoom_factor * 100)}%")
+            codigo_img = None
+            try:
+                codigos_preview = self._extrair_codigos_preview()
+                amostra = codigos_preview[0] if codigos_preview else self.controller.gerar_amostra_preview(cfg)
+                dado = self.controller.normalizar_dado(amostra, cfg)
+                codigo_img = self.controller.gerar_imagem_obj(dado, cfg)
+            except Exception:
+                codigo_img = None
 
-            if zoom_factor != 1.0:
-                img = img.resize(
-                    (max(1, int(img.width * zoom_factor)), max(1, int(img.height * zoom_factor))),
-                    Image.Resampling.LANCZOS,
-                )
-
-            img.thumbnail((560, 420), Image.Resampling.LANCZOS)
-            self.preview_image_ref = ImageTk.PhotoImage(img)
-            self.preview_label.configure(image=self.preview_image_ref, text="")
+            self.preview_canvas.atualizar(
+                lbl_w_mm=etq_w,
+                lbl_h_mm=etq_h,
+                cod_w_mm=cod_w_mm,
+                cod_h_mm=cod_h_mm,
+                codigo_img=codigo_img,
+            )
             self._preview_backend_error_shown = False
         except RuntimeError as exc:
-            # Evita quebrar callback do Tkinter quando backend opcional do reportlab não está disponível.
-            self.preview_label.configure(image="", text="Preview indisponível para barcode neste ambiente")
             if not self._preview_backend_error_shown:
                 messagebox.showwarning(self._t("dialog.title.missing_dependency", "Dependência opcional ausente"), str(exc))
                 self._preview_backend_error_shown = True
         except Exception as exc:
-            self.preview_label.configure(image="", text="Falha ao gerar pré-visualização")
             self.logger.exception(
                 "Erro inesperado no preview",
                 extra={"event": "preview_error", "operation": "preview", "erro": str(exc)},
@@ -1207,18 +1296,24 @@ class QRCodeGenerator:
         try:
             cfg = self._build_config()
             pdf_canvas, image_reader_cls = _obter_modulos_pdf_reportlab()
-            pdf = pdf_canvas.Canvas(caminho_pdf, pagesize=A4)
-            largura_pagina, altura_pagina = A4
+            etq_w_pt = cfg.etiqueta_width_mm * mm
+            etq_h_pt = cfg.etiqueta_height_mm * mm
+            usar_etiqueta_como_pagina = cfg.etiqueta_width_mm < 209 or cfg.etiqueta_height_mm < 296
+            pagesize = (etq_w_pt, etq_h_pt) if usar_etiqueta_como_pagina else A4
 
-            x = 20 * mm
-            y = altura_pagina - 20 * mm
-            largura_item = cfg.qr_width_cm * 10 * mm
-            altura_item = cfg.qr_height_cm * 10 * mm
+            pdf = pdf_canvas.Canvas(caminho_pdf, pagesize=pagesize)
+            largura_pagina, altura_pagina = pagesize
+
             if cfg.tipo_codigo == "barcode":
                 largura_item = cfg.barcode_width_cm * 10 * mm
                 altura_item = cfg.barcode_height_cm * 10 * mm
-            margem = 10 * mm
-            y -= altura_item
+            else:
+                largura_item = cfg.qr_width_cm * 10 * mm
+                altura_item = cfg.qr_height_cm * 10 * mm
+
+            margem = 5 * mm
+            x = margem
+            y = altura_pagina - margem - altura_item
             total = len(codigos)
 
             for i, codigo in enumerate(codigos, start=1):
@@ -1233,15 +1328,20 @@ class QRCodeGenerator:
                 pdf.drawImage(image_reader, x, y, width=largura_item, height=altura_item, preserveAspectRatio=True)
                 self.fila.put({"tipo": "progresso", "atual": i, "total": total, "codigo": codigo})
 
-                x += largura_item + margem
-                if x + largura_item > largura_pagina - 20 * mm:
-                    x = 20 * mm
-                    y -= altura_item + margem
-
-                if y < 20 * mm:
-                    pdf.showPage()
-                    x = 20 * mm
-                    y = altura_pagina - 20 * mm - altura_item
+                if usar_etiqueta_como_pagina:
+                    if i < total:
+                        pdf.showPage()
+                        x = margem
+                        y = altura_pagina - margem - altura_item
+                else:
+                    x += largura_item + margem
+                    if x + largura_item > largura_pagina - margem:
+                        x = margem
+                        y -= altura_item + margem
+                    if y < margem:
+                        pdf.showPage()
+                        x = margem
+                        y = altura_pagina - margem - altura_item
 
             pdf.save()
             if emitir_sucesso:

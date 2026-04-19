@@ -16,5 +16,7 @@ class GeracaoConfig:
     modo: str
     prefixo: str
     sufixo: str
+    etiqueta_width_mm: float = 100.0
+    etiqueta_height_mm: float = 60.0
     max_codigos_por_lote: int = 5000
     max_tamanho_dado: int = 512
