@@ -1,4 +1,5 @@
 import io
+import importlib
 import json
 import logging
 import os
@@ -1453,9 +1454,9 @@ class QRCodeGenerator:
 
     def _imprimir_png_windows_gdi(self, caminho_imagem: str, impressora: str, largura_cm: float, altura_cm: float) -> bool:
         try:
-            import win32con
-            import win32print
-            import win32ui
+            win32con = importlib.import_module("win32con")
+            win32print = importlib.import_module("win32print")
+            win32ui = importlib.import_module("win32ui")
             from PIL import ImageWin
         except Exception:
             return False
