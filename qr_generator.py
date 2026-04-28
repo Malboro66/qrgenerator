@@ -1472,18 +1472,19 @@ class QRCodeGenerator:
             hdc.StartDoc(os.path.basename(caminho_imagem))
             hdc.StartPage()
 
-            dpi_x = max(1, int(hdc.GetDeviceCaps(win32con.LOGPIXELSX)))
-            dpi_y = max(1, int(hdc.GetDeviceCaps(win32con.LOGPIXELSY)))
-            area_w = max(1, int(hdc.GetDeviceCaps(win32con.HORZRES)))
-            area_h = max(1, int(hdc.GetDeviceCaps(win32con.VERTRES)))
+            horzsize_mm = max(1, hdc.GetDeviceCaps(win32con.HORZSIZE))
+            vertsize_mm = max(1, hdc.GetDeviceCaps(win32con.VERTSIZE))
+            horzres_px = max(1, hdc.GetDeviceCaps(win32con.HORZRES))
+            vertres_px = max(1, hdc.GetDeviceCaps(win32con.VERTRES))
 
-            alvo_w = max(1, int(round((max(0.1, largura_cm) / 2.54) * dpi_x)))
-            alvo_h = max(1, int(round((max(0.1, altura_cm) / 2.54) * dpi_y)))
-            x = max(0, (area_w - alvo_w) // 2)
-            y = max(0, (area_h - alvo_h) // 2)
+            ppmm_x = horzres_px / horzsize_mm
+            ppmm_y = vertres_px / vertsize_mm
+
+            alvo_w = max(1, int(round(largura_cm * 10.0 * ppmm_x)))
+            alvo_h = max(1, int(round(altura_cm * 10.0 * ppmm_y)))
 
             dib = ImageWin.Dib(img)
-            dib.draw(hdc.GetHandleOutput(), (x, y, x + alvo_w, y + alvo_h))
+            dib.draw(hdc.GetHandleOutput(), (0, 0, alvo_w, alvo_h))
 
             hdc.EndPage()
             hdc.EndDoc()
