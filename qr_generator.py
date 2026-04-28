@@ -1358,6 +1358,13 @@ class QRCodeGenerator:
             copias = max(1, int(self.copias_impressao.get()))
         except Exception as exc:
             raise RuntimeError("Quantidade de cópias inválida.") from exc
+        cfg = self._build_config()
+        if cfg.tipo_codigo == "barcode":
+            largura_cm = float(cfg.barcode_width_cm)
+            altura_cm = float(cfg.barcode_height_cm)
+        else:
+            largura_cm = float(cfg.qr_width_cm)
+            altura_cm = float(cfg.qr_height_cm)
 
         # Evita acúmulo indefinido de temporários de jobs antigos.
         self._limpar_arquivos_temporarios_impressao(idade_min_segundos=900)
@@ -1379,7 +1386,7 @@ class QRCodeGenerator:
             for caminho_imagem in arquivos_png:
                 if self.cancelar_evento.is_set():
                     raise OperacaoCancelada("Operação cancelada pelo usuário.")
-                self._imprimir_png_windows(caminho_imagem, impressora)
+                self._imprimir_png_windows(caminho_imagem, impressora, largura_cm, altura_cm)
                 time.sleep(0.2)
 
         destino = f"impressora:{impressora or 'padrão do sistema'}"
@@ -1419,7 +1426,10 @@ class QRCodeGenerator:
 
         self._arquivos_temporarios_impressao = restantes
 
-    def _imprimir_png_windows(self, caminho_imagem: str, impressora: str):
+    def _imprimir_png_windows(self, caminho_imagem: str, impressora: str, largura_cm: float, altura_cm: float):
+        if self._imprimir_png_windows_gdi(caminho_imagem, impressora, largura_cm, altura_cm):
+            return
+        # Fallback legado: em alguns ambientes o backend GDI pode estar indisponível.
         if impressora:
             cmd = ["mspaint.exe", "/pt", caminho_imagem, impressora]
         else:
@@ -1440,6 +1450,46 @@ class QRCodeGenerator:
         # O objetivo aqui é apenas disparar o comando de impressão sem bloquear a thread.
         if processo.poll() not in (None, 0):
             raise RuntimeError(f"Falha ao enviar imagem para impressão (código {processo.returncode}).")
+
+    def _imprimir_png_windows_gdi(self, caminho_imagem: str, impressora: str, largura_cm: float, altura_cm: float) -> bool:
+        try:
+            import win32con
+            import win32print
+            import win32ui
+            from PIL import ImageWin
+        except Exception:
+            return False
+
+        nome_impressora = impressora.strip() if impressora else win32print.GetDefaultPrinter()
+        if not nome_impressora:
+            return False
+
+        try:
+            img = Image.open(caminho_imagem).convert("RGB")
+            hdc = win32ui.CreateDC()
+            hdc.CreatePrinterDC(nome_impressora)
+            hdc.StartDoc(os.path.basename(caminho_imagem))
+            hdc.StartPage()
+
+            dpi_x = max(1, int(hdc.GetDeviceCaps(win32con.LOGPIXELSX)))
+            dpi_y = max(1, int(hdc.GetDeviceCaps(win32con.LOGPIXELSY)))
+            area_w = max(1, int(hdc.GetDeviceCaps(win32con.HORZRES)))
+            area_h = max(1, int(hdc.GetDeviceCaps(win32con.VERTRES)))
+
+            alvo_w = max(1, int(round((max(0.1, largura_cm) / 2.54) * dpi_x)))
+            alvo_h = max(1, int(round((max(0.1, altura_cm) / 2.54) * dpi_y)))
+            x = max(0, (area_w - alvo_w) // 2)
+            y = max(0, (area_h - alvo_h) // 2)
+
+            dib = ImageWin.Dib(img)
+            dib.draw(hdc.GetHandleOutput(), (x, y, x + alvo_w, y + alvo_h))
+
+            hdc.EndPage()
+            hdc.EndDoc()
+            hdc.DeleteDC()
+            return True
+        except Exception as exc:
+            raise RuntimeError(self._formatar_excecao(exc, "Falha ao imprimir via driver do Windows")) from exc
 
     def _iniciar_progresso(self, total, invalidos=0, destino="", formato=""):
         self.cancelar_evento.clear()
