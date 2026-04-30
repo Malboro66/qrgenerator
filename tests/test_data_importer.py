@@ -1,4 +1,5 @@
 import csv
+import os
 import tempfile
 from pathlib import Path
 from unittest.mock import patch
@@ -15,14 +16,13 @@ def imp():
 
 def _csv(dados, encoding="utf-8"):
     fd, caminho = tempfile.mkstemp(suffix=".csv")
-    Path(caminho).unlink(missing_ok=True)
+    os.close(fd)
     cols = list(dados.keys())
-    rows = zip(*[dados[c] for c in cols])
+    rows = list(zip(*[dados[c] for c in cols])) if any(dados.values()) else []
     with open(caminho, "w", newline="", encoding=encoding) as f:
         w = csv.writer(f)
         w.writerow(cols)
-        for row in rows:
-            w.writerow(row)
+        w.writerows(rows)
     return caminho
 
 
@@ -30,7 +30,7 @@ def _xlsx(dados):
     pytest.importorskip("openpyxl")
     pd = pytest.importorskip("pandas")
     fd, caminho = tempfile.mkstemp(suffix=".xlsx")
-    Path(caminho).unlink(missing_ok=True)
+    os.close(fd)
     pd.DataFrame(dados).to_excel(caminho, index=False)
     return caminho
 
