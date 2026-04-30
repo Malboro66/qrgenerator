@@ -188,8 +188,10 @@ class TestGeracaoSVG:
         assert len(list(tmp_path.glob("*.svg"))) == 1
 
     def test_svg_com_barcode_lanca_erro(self, app, tmp_path):
+        pytest.importorskip("barcode")
         app.tipo_codigo.set("barcode")
         app.barcode_model.set("code128")
+        app.barcode_disponivel = True
         with pytest.raises(RuntimeError, match="SVG"):
             app.gerar_imagens(["x"], "svg", str(tmp_path), emitir_sucesso=False)
 
