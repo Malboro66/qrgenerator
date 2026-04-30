@@ -1484,6 +1484,33 @@ class QRCodeGenerator:
             alvo_h = max(1, int(round(altura_cm * 10.0 * ppmm_y)))
 
             dib = ImageWin.Dib(img)
+            metricas = {
+                "impressora": nome_impressora,
+                "horzsize_mm": horzsize_mm,
+                "vertsize_mm": vertsize_mm,
+                "horzres_px": horzres_px,
+                "vertres_px": vertres_px,
+                "ppmm_x": round(ppmm_x, 4),
+                "ppmm_y": round(ppmm_y, 4),
+                "largura_solicitada_cm": largura_cm,
+                "altura_solicitada_cm": altura_cm,
+                "alvo_w_px": alvo_w,
+                "alvo_h_px": alvo_h,
+                "img_original_w_px": img.width,
+                "img_original_h_px": img.height,
+                "razao_w": round(alvo_w / img.width, 4) if img.width else 0,
+                "razao_h": round(alvo_h / img.height, 4) if img.height else 0,
+                "alvo_w_mm_calculado": round(alvo_w / ppmm_x, 2) if ppmm_x else 0,
+                "alvo_h_mm_calculado": round(alvo_h / ppmm_y, 2) if ppmm_y else 0,
+            }
+            self.logger.info(
+                "Diagnóstico de impressão GDI",
+                extra={
+                    "event": "print_gdi_metrics",
+                    "operation": "imprimir_gdi",
+                    **metricas,
+                },
+            )
             dib.draw(hdc.GetHandleOutput(), (0, 0, alvo_w, alvo_h))
 
             hdc.EndPage()
@@ -1492,6 +1519,53 @@ class QRCodeGenerator:
             return True
         except Exception as exc:
             raise RuntimeError(self._formatar_excecao(exc, "Falha ao imprimir via driver do Windows")) from exc
+
+    def _obter_metricas_impressora_dc(self, nome_impressora: str) -> dict:
+        """Retorna métricas físicas do DC da impressora sem imprimir nada.
+
+        Usado nos testes diagnósticos. Retorna dict vazio se pywin32 não
+        estiver disponível ou se a impressora não for encontrada.
+        """
+        try:
+            import win32con
+            import win32ui
+        except ImportError:
+            return {}
+
+        hdc = win32ui.CreateDC()
+        try:
+            hdc.CreatePrinterDC(nome_impressora)
+            horzsize_mm = max(1, hdc.GetDeviceCaps(win32con.HORZSIZE))
+            vertsize_mm = max(1, hdc.GetDeviceCaps(win32con.VERTSIZE))
+            horzres_px  = max(1, hdc.GetDeviceCaps(win32con.HORZRES))
+            vertres_px  = max(1, hdc.GetDeviceCaps(win32con.VERTRES))
+            logpixelsx  = max(1, hdc.GetDeviceCaps(win32con.LOGPIXELSX))
+            logpixelsy  = max(1, hdc.GetDeviceCaps(win32con.LOGPIXELSY))
+            physoffx    = hdc.GetDeviceCaps(win32con.PHYSICALOFFSETX)
+            physoffy    = hdc.GetDeviceCaps(win32con.PHYSICALOFFSETY)
+            physwidth   = hdc.GetDeviceCaps(win32con.PHYSICALWIDTH)
+            physheight  = hdc.GetDeviceCaps(win32con.PHYSICALHEIGHT)
+            return {
+                "horzsize_mm":  horzsize_mm,
+                "vertsize_mm":  vertsize_mm,
+                "horzres_px":   horzres_px,
+                "vertres_px":   vertres_px,
+                "logpixelsx":   logpixelsx,
+                "logpixelsy":   logpixelsy,
+                "physicaloffsetx": physoffx,
+                "physicaloffsety": physoffy,
+                "physicalwidth":   physwidth,
+                "physicalheight":  physheight,
+                "ppmm_x": round(horzres_px / horzsize_mm, 4),
+                "ppmm_y": round(vertres_px / vertsize_mm, 4),
+            }
+        except Exception:
+            return {}
+        finally:
+            try:
+                hdc.DeleteDC()
+            except Exception:
+                pass
 
     def _iniciar_progresso(self, total, invalidos=0, destino="", formato=""):
         self.cancelar_evento.clear()
