@@ -100,30 +100,19 @@ class TestSuspeitoA_KeepRatio:
 
 class TestSuspeitoB_DpiMetadata:
 
-    def test_png_gerado_sem_dpi_metadata(self):
+    def test_png_gerado_com_dpi_metadata(self):
         pytest.importorskip("barcode")
         from services.renderers import BarcodeRenderer
         DPI = 200
         cfg = _cfg(barcode_width_cm=8.0, barcode_height_cm=3.0)
         r = BarcodeRenderer(dpi_padrao=DPI)
         img = r.render("ABC123", cfg)
-
-        buf = BytesIO()
-        img.save(buf, format="PNG")
-        buf.seek(0)
-        img_lido = Image.open(buf)
-        dpi_info = img_lido.info.get("dpi")
-
-        if dpi_info is None:
-            print(f"\n[DIAGNÓSTICO B] PNG salvo SEM DPI metadata. "
-                  f"Fallback do Windows usará 96 DPI → imagem impressa "
-                  f"será {img.width/96*2.54:.1f}cm × {img.height/96*2.54:.1f}cm "
-                  f"em vez de {8.0}cm × {3.0}cm.")
-        else:
-            print(f"\n[DIAGNÓSTICO B] PNG salvo COM DPI metadata: {dpi_info}")
-            assert abs(dpi_info[0] - DPI) < 5, (
-                f"DPI no metadata é {dpi_info[0]}, esperado {DPI}"
-            )
+        dpi_info = img.info.get("dpi")
+        assert dpi_info is not None, "PNG deve conter metadados DPI."
+        print(f"\n[DIAGNÓSTICO B] PNG salvo COM DPI metadata: {dpi_info}")
+        assert abs(dpi_info[0] - DPI) < 5, (
+            f"DPI no metadata é {dpi_info[0]}, esperado {DPI}"
+        )
 
 
 class TestSuspeitoD_LoggingEMetricas:
@@ -211,4 +200,62 @@ class TestSuspeitoD_LoggingEMetricas:
             assert 50 < dpi_eq < 1200, (
                 f"DPI equivalente fora do range: {dpi_eq:.1f}"
             )
+        root.destroy()
+
+
+class TestCorrecaoImpressaoGDI:
+
+    def test_imprimir_png_windows_gdi_chama_draw_com_parametros_corretos(self):
+        tk = pytest.importorskip("tkinter")
+        try:
+            root = tk.Tk()
+            root.withdraw()
+        except Exception:
+            pytest.skip("Requer display tkinter")
+
+        from qr_generator import QRCodeGenerator
+
+        mock_service = MagicMock()
+        mock_service.DPI_PADRAO = 200
+        mock_controller = MagicMock()
+        mock_controller.service = mock_service
+        mock_controller.logger = MagicMock()
+        mock_controller.job_store = MagicMock()
+        mock_controller.metrics_store = MagicMock()
+        mock_controller.t = MagicMock(side_effect=lambda key, default, **kwargs: default)
+        mock_controller.obter_modelos_barcode.return_value = [("code128", "Code128")]
+        mock_controller.gerar_amostra_preview.return_value = "123"
+        mock_controller.gerar_imagem_obj.return_value = Image.new("RGB", (10, 10), "white")
+
+        app = QRCodeGenerator(root, controller=mock_controller)
+
+        mock_dc = MagicMock()
+        mock_dc.GetDeviceCaps.side_effect = [100, 100, 1000, 1000]
+        mock_win32con = SimpleNamespace(HORZSIZE=1, VERTSIZE=2, HORZRES=3, VERTRES=4)
+        mock_win32print = SimpleNamespace(GetDefaultPrinter=MagicMock(return_value="MinhaImpressora"))
+        mock_win32ui = SimpleNamespace(CreateDC=MagicMock(return_value=mock_dc))
+        mock_dib = MagicMock()
+
+        with patch("qr_generator.importlib.import_module") as mock_import, \
+             patch("qr_generator.Image.open") as mock_image_open, \
+             patch("PIL.ImageWin.Dib", return_value=mock_dib):
+            mock_import.side_effect = lambda name: {
+                "win32con": mock_win32con,
+                "win32print": mock_win32print,
+                "win32ui": mock_win32ui,
+            }[name]
+            mock_img_pil = MagicMock()
+            mock_img_pil.info = {"dpi": (200, 200)}
+            mock_img_pil.width = 800
+            mock_img_pil.height = 300
+            mock_img_pil.convert.return_value = mock_img_pil
+            mock_image_open.return_value = mock_img_pil
+
+            ok = app._imprimir_png_windows_gdi("/tmp/teste.png", "MinhaImpressora", 8.0, 3.0)
+
+        assert ok is True
+        mock_dc.CreatePrinterDC.assert_called_once_with("MinhaImpressora")
+        mock_dc.StartDoc.assert_called_once()
+        mock_dib.draw.assert_called_once_with(mock_dc.GetHandleOutput(), (0, 0, 800, 300))
+        mock_dc.EndDoc.assert_called_once()
         root.destroy()

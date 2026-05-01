@@ -1270,7 +1270,11 @@ class QRCodeGenerator:
                         qr.save(f)
                 else:
                     imagem = self._gerar_imagem_obj(dado, cfg)
-                    imagem.save(os.path.join(destino, f"{nome_arquivo}.png"), format="PNG")
+                    imagem.save(
+                        os.path.join(destino, f"{nome_arquivo}.png"),
+                        format="PNG",
+                        dpi=(self.controller.service.DPI_PADRAO, self.controller.service.DPI_PADRAO),
+                    )
 
                 self.fila.put({"tipo": "progresso", "atual": i, "total": total, "codigo": codigo})
 
@@ -1322,7 +1326,11 @@ class QRCodeGenerator:
                     raise OperacaoCancelada("Operação cancelada pelo usuário.")
                 imagem = self._gerar_imagem_obj(self._normalizar_dado(codigo, cfg), cfg)
                 buffer = io.BytesIO()
-                imagem.save(buffer, format="PNG")
+                imagem.save(
+                    buffer,
+                    format="PNG",
+                    dpi=(self.controller.service.DPI_PADRAO, self.controller.service.DPI_PADRAO),
+                )
                 buffer.seek(0)
                 image_reader = image_reader_cls(buffer)
 
@@ -1467,10 +1475,10 @@ class QRCodeGenerator:
 
         try:
             img = Image.open(caminho_imagem).convert("RGB")
+            img_dpi = img.info.get("dpi", (self.controller.service.DPI_PADRAO, self.controller.service.DPI_PADRAO))
             hdc = win32ui.CreateDC()
             hdc.CreatePrinterDC(nome_impressora)
             hdc.StartDoc(os.path.basename(caminho_imagem))
-            hdc.StartPage()
 
             horzsize_mm = max(1, hdc.GetDeviceCaps(win32con.HORZSIZE))
             vertsize_mm = max(1, hdc.GetDeviceCaps(win32con.VERTSIZE))
@@ -1498,27 +1506,35 @@ class QRCodeGenerator:
                 "alvo_h_px": alvo_h,
                 "img_original_w_px": img.width,
                 "img_original_h_px": img.height,
-                "razao_w": round(alvo_w / img.width, 4) if img.width else 0,
-                "razao_h": round(alvo_h / img.height, 4) if img.height else 0,
+                "render_dpi_x": img_dpi[0],
+                "render_dpi_y": img_dpi[1],
                 "alvo_w_mm_calculado": round(alvo_w / ppmm_x, 2) if ppmm_x else 0,
                 "alvo_h_mm_calculado": round(alvo_h / ppmm_y, 2) if ppmm_y else 0,
             }
             self.logger.info(
-                "Diagnóstico de impressão GDI",
+                "Diagnóstico de impressão GDI (ajustado)",
                 extra={
-                    "event": "print_gdi_metrics",
+                    "event": "print_gdi_metrics_adjusted",
                     "operation": "imprimir_gdi",
                     **metricas,
                 },
             )
             dib.draw(hdc.GetHandleOutput(), (0, 0, alvo_w, alvo_h))
 
-            hdc.EndPage()
             hdc.EndDoc()
             hdc.DeleteDC()
             return True
         except Exception as exc:
-            raise RuntimeError(self._formatar_excecao(exc, "Falha ao imprimir via driver do Windows")) from exc
+            self.logger.error(
+                f"Falha ao imprimir via driver do Windows (GDI): {exc}",
+                exc_info=True,
+                extra={
+                    "event": "print_gdi_error",
+                    "operation": "imprimir_gdi",
+                    "erro": str(exc),
+                },
+            )
+            return False
 
     def _obter_metricas_impressora_dc(self, nome_impressora: str) -> dict:
         """Retorna métricas físicas do DC da impressora sem imprimir nada.
