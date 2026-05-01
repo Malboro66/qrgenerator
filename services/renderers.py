@@ -38,6 +38,7 @@ class QRCodeRenderer:
             img = img.get_image()
 
         qr_img = img.convert("RGB")
+        qr_img.info["dpi"] = (self.dpi_padrao, self.dpi_padrao)
         return ImageResizer.resize_with_ratio(
             qr_img,
             self._cm_para_px(cfg.qr_width_cm),
@@ -122,6 +123,7 @@ class BarcodeRenderer:
         buf.seek(0)
         img = Image.open(buf).convert("RGB")
         img = ImageResizer.resize_with_ratio(img, width_px, height_px, keep_ratio)
+        img.info["dpi"] = (self.dpi_padrao, self.dpi_padrao)
         if modelo == "dun14":
             img = self._aplicar_moldura_itf14(img)
         return img
@@ -154,6 +156,7 @@ class BarcodeRenderer:
             opcoes.update({"barHeight": 20 * rl_mm, "barWidth": 0.45, "humanReadable": True})
         desenho = createBarcodeDrawing(nome_reportlab, **opcoes)
         img = renderPM.drawToPIL(desenho, dpi=self.dpi_padrao).convert("RGB")
+        img.info["dpi"] = (self.dpi_padrao, self.dpi_padrao)
         return ImageResizer.resize_with_ratio(img, width_px, height_px, keep_ratio)
 
     # ------------------------------------------------------------------ #
