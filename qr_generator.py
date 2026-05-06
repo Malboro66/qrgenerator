@@ -1543,8 +1543,8 @@ class QRCodeGenerator:
         estiver disponível ou se a impressora não for encontrada.
         """
         try:
-            import win32con
-            import win32ui
+            import win32con  
+            import win32ui  
         except ImportError:
             return {}
 
