@@ -24,6 +24,10 @@ class AppController:
     def metrics_store(self):
         return self.deps.metrics_store
 
+    @property
+    def service(self):
+        return self.deps.service
+
     def t(self, key: str, default: str = "", **kwargs) -> str:
         return self.deps.i18n.t(key, default, **kwargs)
 
