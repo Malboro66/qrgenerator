@@ -10,7 +10,7 @@ class LoteApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.controller = LoteController()
-        self.root.title("Gestão de Lotes Industriais")
+        self.root.title("Gestão de Lotes")
         self._configurar_estilos()
         self._build_main()
         self._refresh_lotes()
