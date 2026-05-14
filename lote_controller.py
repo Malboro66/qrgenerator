@@ -22,14 +22,17 @@ class LoteController:
     def importar_xml(self, caminho_xml: str):
         return importar_itens_nfe(caminho_xml)
 
-    def criar_lote(self, mes_rec: int, ano_rec: int, nf_ref: str, ano_nf: str, itens):
-        return self.service.criar_lote(mes_rec, ano_rec, nf_ref, ano_nf, itens)
+    def criar_lote(self, seq_lote: int, mes_rec: int, ano_rec: int, nf_ref: str, itens):
+        return self.service.criar_lote(seq_lote, mes_rec, ano_rec, nf_ref, itens)
 
     def listar_lotes(self):
         return self.store.listar_lotes()
 
     def atualizar_status(self, lote_id: str, status: str):
         self.store.atualizar_status(lote_id, status)
+
+    def deletar_lote(self, lote_id: str):
+        self.store.deletar_lote(lote_id)
 
     def reimprimir_lote(self, lote: Lote, codigos: list[str] | None = None):
         codigos_para_imprimir = codigos if codigos is not None else [i.cod_gerado for i in lote.itens]
