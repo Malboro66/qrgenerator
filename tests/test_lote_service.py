@@ -18,3 +18,12 @@ def test_seq_crud_status(tmp_path):
     assert len(lotes) == 1
     store.atualizar_status(lote.id, "impresso")
     assert store.obter_lote(lote.id).status == "impresso"
+
+
+def test_deletar_lote(tmp_path):
+    store = LoteStore(str(tmp_path / "lotes.db"))
+    service = LoteService(store)
+    lote = service.criar_lote(1, 1, 2026, "011", [ItemLote("1", "INJETOR", 2, "011")])
+    assert store.obter_lote(lote.id) is not None
+    store.deletar_lote(lote.id)
+    assert store.obter_lote(lote.id) is None

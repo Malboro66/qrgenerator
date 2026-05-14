@@ -29,6 +29,7 @@ class LoteApp:
         ttk.Button(top, text="Abrir Lote", style="Secondary.TButton", command=self._abrir_lote).pack(side="left", padx=4)
         ttk.Button(top, text="Exibir Lote", style="Secondary.TButton", command=self._exibir_lote).pack(side="left", padx=4)
         ttk.Button(top, text="Relatório", style="Secondary.TButton", command=self._abrir_relatorio).pack(side="left", padx=4)
+        ttk.Button(top, text="Excluir Lote", style="Secondary.TButton", command=self._excluir_lote).pack(side="left", padx=4)
         self.tree = ttk.Treeview(self.root, columns=("ident", "criado", "nf", "qtd", "status"), show="headings")
         for c, t in [("ident", "IDENT"), ("criado", "Criação"), ("nf", "NF Ref."), ("qtd", "Qtd. itens"), ("status", "Status")]:
             self.tree.heading(c, text=t)
@@ -125,3 +126,17 @@ class LoteApp:
         win = tk.Toplevel(self.root)
         win.title("Relatório")
         ttk.Label(win, text="Relatório de lotes").pack()
+
+
+    def _excluir_lote(self):
+        sel = self.tree.selection()
+        if not sel:
+            messagebox.showwarning("Atenção", "Selecione um lote para excluir.")
+            return
+        lote_id = sel[0]
+        confirmar = messagebox.askyesno("Confirmar exclusão", "Deseja realmente excluir o lote selecionado?")
+        if not confirmar:
+            return
+        self.controller.deletar_lote(lote_id)
+        self._refresh_lotes()
+        messagebox.showinfo("Sucesso", "Lote excluído com sucesso.")

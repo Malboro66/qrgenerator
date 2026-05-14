@@ -31,6 +31,9 @@ class LoteController:
     def atualizar_status(self, lote_id: str, status: str):
         self.store.atualizar_status(lote_id, status)
 
+    def deletar_lote(self, lote_id: str):
+        self.store.deletar_lote(lote_id)
+
     def reimprimir_lote(self, lote: Lote, codigos: list[str] | None = None):
         codigos_para_imprimir = codigos if codigos is not None else [i.cod_gerado for i in lote.itens]
         return self._imprimir_codigos(codigos_para_imprimir)
