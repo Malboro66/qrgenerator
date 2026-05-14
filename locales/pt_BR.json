@@ -69,5 +69,13 @@
   "validation.no_valid_codes_for_print": "Nenhum código válido encontrado para impressão.",
   "error.open_output_folder": "Não foi possível abrir a pasta de saída:\n{erro}",
   "info.generated_files_in": "Arquivo(s) gerado(s) em: {caminho}",
-  "error.open_file_failed": "Não foi possível abrir o arquivo: {erro}"
+  "error.open_file_failed": "Não foi possível abrir o arquivo: {erro}",
+  "lote.app.title": "Gestão de Lotes Industriais",
+  "lote.button.generate": "Gerar Lote",
+  "lote.button.open": "Abrir Lote",
+  "lote.button.view": "Exibir Lote",
+  "lote.button.report": "Relatório",
+  "lote.status.draft": "rascunho",
+  "lote.status.confirmed": "confirmado",
+  "lote.status.printed": "impresso"
 }
