@@ -67,8 +67,13 @@ class LoteStore:
             conn.execute("UPDATE lotes SET status=? WHERE id=?", (status, id))
 
     def proximo_seq_lote(self, mes_rec: int, ano_rec: int) -> int:
+        # Must match ano_rec persisted in criar_lote (últimos 2 dígitos).
+        ano_db = int(str(ano_rec)[-2:])
         with self._connect() as conn:
-            row = conn.execute("SELECT COALESCE(MAX(seq_lote), 0) FROM lotes WHERE mes_rec=? AND ano_rec=?", (mes_rec, ano_rec)).fetchone()
+            row = conn.execute(
+                "SELECT COALESCE(MAX(seq_lote), 0) FROM lotes WHERE mes_rec=? AND ano_rec=?",
+                (mes_rec, ano_db),
+            ).fetchone()
         return int(row[0]) + 1
 
     def deletar_lote(self, id: str):
