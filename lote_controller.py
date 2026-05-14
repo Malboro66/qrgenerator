@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import platform
+import subprocess
 import tempfile
 from pathlib import Path
 
@@ -28,8 +31,9 @@ class LoteController:
     def atualizar_status(self, lote_id: str, status: str):
         self.store.atualizar_status(lote_id, status)
 
-    def reimprimir_lote(self, lote: Lote):
-        return self._imprimir_codigos([i.cod_gerado for i in lote.itens])
+    def reimprimir_lote(self, lote: Lote, codigos: list[str] | None = None):
+        codigos_para_imprimir = codigos if codigos is not None else [i.cod_gerado for i in lote.itens]
+        return self._imprimir_codigos(codigos_para_imprimir)
 
     def _imprimir_codigos(self, codigos: list[str]):
         ctrl = AppController.build_default()
@@ -42,4 +46,21 @@ class LoteController:
             out = pasta / f"codigo_{idx:03d}.png"
             img.save(out)
             arquivos.append(str(out))
-        return arquivos
+
+        enviados = self._enviar_para_impressao(arquivos)
+        return {"arquivos": arquivos, "enviados": enviados}
+
+    def _enviar_para_impressao(self, arquivos: list[str]) -> bool:
+        sistema = platform.system().lower()
+        try:
+            if "windows" in sistema:
+                for arq in arquivos:
+                    os.startfile(arq, "print")
+                return True
+            if "linux" in sistema:
+                for arq in arquivos:
+                    subprocess.run(["lp", arq], check=False)
+                return True
+        except Exception:
+            return False
+        return False

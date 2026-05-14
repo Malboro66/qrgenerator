@@ -10,7 +10,7 @@ class LoteApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.controller = LoteController()
-        self.root.title("Gestão de Lotes")
+        self.root.title("Gestão de Lotes Industriais")
         self._configurar_estilos()
         self._build_main()
         self._refresh_lotes()
@@ -21,9 +21,6 @@ class LoteApp:
         style.map("Primary.TButton", foreground=[("!disabled", "white")], background=[("!disabled", "#2563eb")])
         style.configure("Secondary.TButton", padding=(12, 10), font=("Segoe UI", 10, "bold"))
         style.map("Secondary.TButton", foreground=[("!disabled", "#374151")], background=[("!disabled", "#e5e7eb")])
-        style.configure("App.TCombobox", padding=(6, 4))
-        style.configure("App.TSpinbox", padding=(6, 4))
-        style.configure("App.TEntry", padding=(6, 4))
 
     def _build_main(self):
         top = ttk.Frame(self.root)
@@ -47,20 +44,52 @@ class LoteApp:
             self.tree.insert("", "end", iid=lote.id, values=(lote.ident, lote.criado_em[:19], lote.nf_referencia, len(lote.itens), lote.status))
         self.status.config(text=f"Total de lotes: {len(self.lotes)}")
 
+    def _selecionar_codigos_para_impressao(self, lote) -> list[str]:
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Selecionar itens para impressão")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        ttk.Label(dialog, text=f"Lote {lote.ident} - selecione os itens:").pack(anchor="w", padx=10, pady=8)
+        lb = tk.Listbox(dialog, selectmode=tk.MULTIPLE, width=80, height=12)
+        lb.pack(fill="both", expand=True, padx=10)
+        for idx, item in enumerate(lote.itens):
+            lb.insert("end", f"{item.cod_gerado} | {item.cod_item} | {item.descr_item} | Qtd: {item.qty}")
+            lb.selection_set(idx)
+
+        selecionados: list[str] = []
+
+        def confirmar():
+            inds = lb.curselection()
+            selecionados.extend([lote.itens[i].cod_gerado for i in inds])
+            dialog.destroy()
+
+        ttk.Button(dialog, text="Confirmar seleção", style="Primary.TButton", command=confirmar).pack(pady=10)
+        self.root.wait_window(dialog)
+        return selecionados
+
     def _abrir_gerar_lote(self):
         caminho = filedialog.askopenfilename(filetypes=[("XML", "*.xml")])
         if not caminho:
             return
         try:
             itens = self.controller.importar_xml(caminho)
+            lote = self.controller.criar_lote(1, 2026, itens[0].nf_numero, "122", itens)
+            codigos = self._selecionar_codigos_para_impressao(lote)
+            if not codigos:
+                self.controller.atualizar_status(lote.id, "confirmado")
+                self._refresh_lotes()
+                messagebox.showwarning("Atenção", "Nenhum item selecionado para impressão.")
+                return
+            resultado = self.controller.reimprimir_lote(lote, codigos=codigos)
+            self.controller.atualizar_status(lote.id, "impresso")
+            self._refresh_lotes()
+            if resultado["enviados"]:
+                messagebox.showinfo("Sucesso", f"Lote {lote.ident} enviado para impressão.")
+            else:
+                messagebox.showwarning("Aviso", f"Impressão não enviada automaticamente. PNGs salvos em: {resultado['arquivos'][0].rsplit('/', 1)[0] if resultado['arquivos'] else 'n/a'}")
         except ValueError as exc:
             messagebox.showerror("Erro", str(exc))
-            return
-        lote = self.controller.criar_lote(1, 2026, itens[0].nf_numero, "122", itens)
-        self.controller.reimprimir_lote(lote)
-        self.controller.atualizar_status(lote.id, "impresso")
-        self._refresh_lotes()
-        messagebox.showinfo("Sucesso", f"Lote {lote.ident} criado e enviado para impressão.")
 
     def _abrir_lote(self):
         self._exibir_lote()
