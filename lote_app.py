@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from lote_controller import LoteController
 
@@ -74,7 +74,16 @@ class LoteApp:
             return
         try:
             itens = self.controller.importar_xml(caminho)
-            lote = self.controller.criar_lote(1, 2026, itens[0].nf_numero, "122", itens)
+            seq_lote = simpledialog.askinteger("Nº do lote", "Informe o número do lote:", parent=self.root, minvalue=1, maxvalue=99)
+            if seq_lote is None:
+                return
+            mes_rec = simpledialog.askinteger("Mês", "Informe o mês do recebimento (1-12):", parent=self.root, minvalue=1, maxvalue=12)
+            if mes_rec is None:
+                return
+            ano_rec = simpledialog.askinteger("Ano", "Informe o ano do recebimento (ex: 2026):", parent=self.root, minvalue=2020, maxvalue=2040)
+            if ano_rec is None:
+                return
+            lote = self.controller.criar_lote(seq_lote, mes_rec, ano_rec, itens[0].nf_numero, itens)
             codigos = self._selecionar_codigos_para_impressao(lote)
             if not codigos:
                 self.controller.atualizar_status(lote.id, "confirmado")
