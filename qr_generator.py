@@ -24,6 +24,7 @@ from tkinter import filedialog, messagebox, ttk
 from app_controller import AppController
 from models.geracao_config import GeracaoConfig
 from preview_interativo import PreviewInterativo
+from services.print_service import imprimir_png_windows, listar_impressoras_windows
 
 # Equivalentes do ReportLab para evitar dependência em tempo de import.
 MM_TO_POINTS = 72 / 25.4
@@ -76,11 +77,7 @@ class QRCodeGenerator:
     """Aplicativo desktop para geração de QR Codes e códigos de barras."""
 
     _PRESETS_ETIQUETA = {
-        "A4 (210×297 mm)": (210, 297),
-        "Etiqueta 100×60 mm": (100, 60),
-        "Etiqueta 80×40 mm": (80, 40),
-        "Etiqueta 60×30 mm": (60, 30),
-        "Etiqueta 50×25 mm": (50, 25),
+        "Etiqueta 70×50 mm": (70, 50),
     }
 
     def __init__(self, root: tk.Tk, controller: AppController | None = None):
@@ -109,8 +106,8 @@ class QRCodeGenerator:
         self.qr_height_cm = tk.StringVar(value="4.0")
         self.barcode_width_cm = tk.StringVar(value="8.0")
         self.barcode_height_cm = tk.StringVar(value="3.0")
-        self.etiqueta_width_mm = tk.StringVar(value="100")
-        self.etiqueta_height_mm = tk.StringVar(value="60")
+        self.etiqueta_width_mm = tk.StringVar(value="70")
+        self.etiqueta_height_mm = tk.StringVar(value="50")
         self.keep_qr_ratio = tk.BooleanVar(value=True)
         self.keep_barcode_ratio = tk.BooleanVar(value=True)
         self.qr_foreground_color = tk.StringVar(value="black")
@@ -120,7 +117,7 @@ class QRCodeGenerator:
         self.tipo_codigo = tk.StringVar(value="qrcode")
         self.barcode_model = tk.StringVar(value="code128")
         self.preview_zoom = tk.StringVar(value="100%")
-        self.preview_preset = tk.StringVar(value="A4")
+        self.preview_preset = tk.StringVar(value="Etiqueta 70x50 mm")
         self.preview_margin_cm = tk.StringVar(value="2.0")
         self.preview_spacing_cm = tk.StringVar(value="1.0")
         self.impressora_var = tk.StringVar(value="")
@@ -351,14 +348,14 @@ class QRCodeGenerator:
             spin.bind("<FocusOut>", lambda _e: self.solicitar_atualizacao_preview())
             spin.bind("<KeyRelease>", lambda _e: self.solicitar_atualizacao_preview())
 
-        self.etiqueta_preset = tk.StringVar(value="Personalizada")
+        self.etiqueta_preset = tk.StringVar(value="Etiqueta 70×50 mm")
         self.etiqueta_preset_combo = ttk.Combobox(
             self.config_frame,
             textvariable=self.etiqueta_preset,
             state="readonly",
             width=22,
             style="App.TCombobox",
-            values=["Personalizada", *self._PRESETS_ETIQUETA.keys()],
+            values=list(self._PRESETS_ETIQUETA.keys()),
         )
         self.etiqueta_preset_combo.grid(row=8, column=3, padx=5, pady=5, sticky="w")
         self.etiqueta_preset_combo.bind("<<ComboboxSelected>>", self._ao_selecionar_preset_etiqueta)
@@ -518,7 +515,7 @@ class QRCodeGenerator:
             textvariable=self.preview_preset,
             state="readonly",
             width=20,
-            values=["A4", "Etiqueta 8x10.5 cm", "Etiqueta 60x40 mm"],
+            values=["Etiqueta 70x50 mm"],
             style="App.TCombobox",
         )
         self.preview_preset_combo.pack(side="left", padx=(self.space_sm, self.space_md))
@@ -736,38 +733,7 @@ class QRCodeGenerator:
                 )
 
     def _listar_impressoras_windows(self):
-        if not sys.platform.startswith("win"):
-            return [], ""
-        comando = (
-            "Get-CimInstance Win32_Printer | "
-            "Select-Object Name,Default | "
-            "ConvertTo-Json -Compress"
-        )
-        saida = subprocess.check_output(
-            ["powershell", "-NoProfile", "-Command", comando],
-            stderr=subprocess.STDOUT,
-            timeout=10,
-            text=True,
-        ).strip()
-        if not saida:
-            return [], ""
-
-        dados = json.loads(saida)
-        if isinstance(dados, dict):
-            dados = [dados]
-
-        impressoras = []
-        padrao = ""
-        for item in dados:
-            nome = str(item.get("Name", "")).strip()
-            if not nome:
-                continue
-            impressoras.append(nome)
-            if bool(item.get("Default")):
-                padrao = nome
-
-        impressoras = sorted(set(impressoras), key=lambda nome: nome.lower())
-        return impressoras, padrao
+        return listar_impressoras_windows()
 
     def atualizar_lista_impressoras(self, notificar=False):
         if not sys.platform.startswith("win"):
@@ -1050,23 +1016,17 @@ class QRCodeGenerator:
             self.qr_height_cm.set(f"{h_mm / 10:.2f}")
 
     def _ao_redimensionar_etiqueta_por_drag(self, w_mm: float, h_mm: float):
-        self.etiqueta_width_mm.set(f"{w_mm:.0f}")
-        self.etiqueta_height_mm.set(f"{h_mm:.0f}")
-        self.etiqueta_preset.set("Personalizada")
+        self.etiqueta_width_mm.set("70")
+        self.etiqueta_height_mm.set("50")
+        self.etiqueta_preset.set("Etiqueta 70×50 mm")
 
     def _build_config(self) -> GeracaoConfig:
         if self.tipo_codigo.get() == "barcode" and not self.barcode_disponivel:
             raise ValueError("Código de barras indisponível neste ambiente (nenhum backend funcional detectado).")
         if self.formato_saida.get() in {"pdf", "imprimir"} and not self.pdf_export_disponivel:
             raise ValueError("Formato PDF/Impressão indisponível neste ambiente (dependência reportlab ausente).")
-        etiqueta_width_mm = max(
-            20.0,
-            self._parse_float_input(self.etiqueta_width_mm.get() or "100", self._t("labels.etiqueta_width", "Largura da etiqueta (mm)")),
-        )
-        etiqueta_height_mm = max(
-            20.0,
-            self._parse_float_input(self.etiqueta_height_mm.get() or "60", self._t("labels.etiqueta_height", "Altura da etiqueta (mm)")),
-        )
+        etiqueta_width_mm = 70.0
+        etiqueta_height_mm = 50.0
         return GeracaoConfig(
             qr_width_cm=self._parse_float_input(self.qr_width_cm.get(), self._t("labels.qr_width", "Largura QR (cm)")),
             qr_height_cm=self._parse_float_input(self.qr_height_cm.get(), self._t("labels.qr_height", "Altura QR (cm)")),
@@ -1117,13 +1077,8 @@ class QRCodeGenerator:
             return []
 
     def _gerar_preview_documento(self, codigos, cfg: GeracaoConfig) -> Image.Image:
-        preset = self.preview_preset.get()
-        if preset == "Etiqueta 8x10.5 cm":
-            largura, altura = int(80 * mm), int(105 * mm)
-        elif preset == "Etiqueta 60x40 mm":
-            largura, altura = int(60 * mm), int(40 * mm)
-        else:
-            largura, altura = map(int, A4)
+        _preset = self.preview_preset.get()
+        largura, altura = int(70 * mm), int(50 * mm)
 
         margem_cm = max(0.2, self._parse_float_input(self.preview_margin_cm.get(), self._t("labels.preview_margin", "Margem (cm)")))
         espaco_cm = max(0.1, self._parse_float_input(self.preview_spacing_cm.get(), self._t("labels.preview_spacing", "Espaçamento (cm)")))
@@ -1193,8 +1148,8 @@ class QRCodeGenerator:
     def atualizar_preview(self):
         try:
             cfg = self._build_config()
-            etq_w = max(20.0, float(self.etiqueta_width_mm.get() or "100"))
-            etq_h = max(20.0, float(self.etiqueta_height_mm.get() or "60"))
+            etq_w = 70.0
+            etq_h = 50.0
 
             if cfg.tipo_codigo == "barcode":
                 cod_w_mm = cfg.barcode_width_cm * 10
@@ -1436,105 +1391,17 @@ class QRCodeGenerator:
         self._arquivos_temporarios_impressao = restantes
 
     def _imprimir_png_windows(self, caminho_imagem: str, impressora: str, largura_cm: float, altura_cm: float):
-        if self._imprimir_png_windows_gdi(caminho_imagem, impressora, largura_cm, altura_cm):
-            return
-        # Fallback legado: em alguns ambientes o backend GDI pode estar indisponível.
-        if impressora:
-            cmd = ["mspaint.exe", "/pt", caminho_imagem, impressora]
-        else:
-            cmd = ["mspaint.exe", "/p", caminho_imagem]
         try:
-            processo = subprocess.Popen(
-                cmd,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+            imprimir_png_windows(
+                caminho_imagem,
+                impressora,
+                largura_cm,
+                altura_cm,
+                dpi=self.controller.service.DPI_PADRAO,
+                logger=self.logger,
             )
-        except FileNotFoundError as exc:
-            raise RuntimeError("Não foi possível localizar o mspaint.exe para realizar a impressão.") from exc
-        except OSError as exc:
-            raise RuntimeError(self._formatar_excecao(exc, "Falha ao iniciar impressão via mspaint")) from exc
-
-        # Não aguarda o término: o MSPaint pode permanecer aberto aguardando o usuário.
-        # O objetivo aqui é apenas disparar o comando de impressão sem bloquear a thread.
-        if processo.poll() not in (None, 0):
-            raise RuntimeError(f"Falha ao enviar imagem para impressão (código {processo.returncode}).")
-
-    def _imprimir_png_windows_gdi(self, caminho_imagem: str, impressora: str, largura_cm: float, altura_cm: float) -> bool:
-        try:
-            win32con = importlib.import_module("win32con")
-            win32print = importlib.import_module("win32print")
-            win32ui = importlib.import_module("win32ui")
-            from PIL import ImageWin
-        except Exception:
-            return False
-
-        nome_impressora = impressora.strip() if impressora else win32print.GetDefaultPrinter()
-        if not nome_impressora:
-            return False
-
-        try:
-            img = Image.open(caminho_imagem).convert("RGB")
-            img_dpi = img.info.get("dpi", (self.controller.service.DPI_PADRAO, self.controller.service.DPI_PADRAO))
-            hdc = win32ui.CreateDC()
-            hdc.CreatePrinterDC(nome_impressora)
-            hdc.StartDoc(os.path.basename(caminho_imagem))
-
-            horzsize_mm = max(1, hdc.GetDeviceCaps(win32con.HORZSIZE))
-            vertsize_mm = max(1, hdc.GetDeviceCaps(win32con.VERTSIZE))
-            horzres_px = max(1, hdc.GetDeviceCaps(win32con.HORZRES))
-            vertres_px = max(1, hdc.GetDeviceCaps(win32con.VERTRES))
-
-            ppmm_x = horzres_px / horzsize_mm
-            ppmm_y = vertres_px / vertsize_mm
-
-            alvo_w = max(1, int(round(largura_cm * 10.0 * ppmm_x)))
-            alvo_h = max(1, int(round(altura_cm * 10.0 * ppmm_y)))
-
-            dib = ImageWin.Dib(img)
-            metricas = {
-                "impressora": nome_impressora,
-                "horzsize_mm": horzsize_mm,
-                "vertsize_mm": vertsize_mm,
-                "horzres_px": horzres_px,
-                "vertres_px": vertres_px,
-                "ppmm_x": round(ppmm_x, 4),
-                "ppmm_y": round(ppmm_y, 4),
-                "largura_solicitada_cm": largura_cm,
-                "altura_solicitada_cm": altura_cm,
-                "alvo_w_px": alvo_w,
-                "alvo_h_px": alvo_h,
-                "img_original_w_px": img.width,
-                "img_original_h_px": img.height,
-                "render_dpi_x": img_dpi[0],
-                "render_dpi_y": img_dpi[1],
-                "alvo_w_mm_calculado": round(alvo_w / ppmm_x, 2) if ppmm_x else 0,
-                "alvo_h_mm_calculado": round(alvo_h / ppmm_y, 2) if ppmm_y else 0,
-            }
-            self.logger.info(
-                "Diagnóstico de impressão GDI (ajustado)",
-                extra={
-                    "event": "print_gdi_metrics_adjusted",
-                    "operation": "imprimir_gdi",
-                    **metricas,
-                },
-            )
-            dib.draw(hdc.GetHandleOutput(), (0, 0, alvo_w, alvo_h))
-
-            hdc.EndDoc()
-            hdc.DeleteDC()
-            return True
         except Exception as exc:
-            self.logger.error(
-                f"Falha ao imprimir via driver do Windows (GDI): {exc}",
-                exc_info=True,
-                extra={
-                    "event": "print_gdi_error",
-                    "operation": "imprimir_gdi",
-                    "erro": str(exc),
-                },
-            )
-            return False
+            raise RuntimeError(self._formatar_excecao(exc, "Falha na impressão")) from exc
 
     def _obter_metricas_impressora_dc(self, nome_impressora: str) -> dict:
         """Retorna métricas físicas do DC da impressora sem imprimir nada.
