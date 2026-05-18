@@ -57,17 +57,26 @@ def test_send_command_not_connected():
 def test_calibrate_invalid_label_length():
     p = ArgoxPrinter(connection_type="network", host="127.0.0.1")
     with pytest.raises(ValueError):
-        p.calibrate_printer(0, 1)
+        p.calibrate_printer(50, 0, 1)
+
+
+def test_calibrate_invalid_label_width():
+    p = ArgoxPrinter(connection_type="network", host="127.0.0.1")
+    with pytest.raises(ValueError):
+        p.calibrate_printer(0, 70, 3)
 
 
 def test_calibrate_sends_correct_sequence():
     p = ArgoxPrinter(connection_type="network", host="127.0.0.1", sensor_type="r")
     p.send_command = MagicMock(return_value=True)
-    assert p.calibrate_printer(50, 3, stop_position_dots=300) is True
+    assert p.calibrate_printer(50, 70, 3, stop_position_dots=300) is True
     calls = [c.args[0] for c in p.send_command.call_args_list]
     assert calls[0] == "\x02r\r\n"
-    assert calls[1].startswith("Q")
-    assert calls[2] == "\x02f300\r\n"
+    assert calls[1].startswith("q")
+    assert calls[2].startswith("Q")
+    assert calls[3] == "\x02f300\r\n"
+    assert calls[1] == "q400\r\n"
+    assert calls[2] == "Q559,24\r\n"
 
 
 def test_print_label_no_duplicate_L():
@@ -109,3 +118,18 @@ def test_build_payload_structure():
     )
     assert payload.startswith("L\r\n")
     assert payload.endswith("E\r\n")
+
+
+def test_build_payload_with_center_text_and_barcode():
+    payload = ArgoxPrinter.build_payload(
+        text_items=[{"y": 50, "text": "ABC123", "font_size": 2, "font_type": 1, "center": True, "label_width_dots": 400}],
+        barcode_items=[{"y": 150, "data": "123456", "height": 50, "type": 1, "center": True, "label_width_dots": 400}],
+    )
+    assert "H" in payload
+    assert "B" in payload
+    assert "H" + str(ArgoxPrinter._calc_center_x(400, ArgoxPrinter._estimate_text_width_dots("ABC123", 2))) in payload
+
+
+def test_calc_center_x_invalid():
+    with pytest.raises(ValueError):
+        ArgoxPrinter._calc_center_x(0, 10)
