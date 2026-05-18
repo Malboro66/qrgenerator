@@ -39,6 +39,7 @@ class ArgoxPrinter:
         self.dpi = dpi
         self.inter_command_delay = inter_command_delay
         self._connection: socket.socket | serial.Serial | None = None
+        self._mm_per_inch = 25.4
 
     def __enter__(self) -> "ArgoxPrinter":
         """Abre conexão ao entrar no contexto."""
@@ -96,34 +97,68 @@ class ArgoxPrinter:
                 self._connection.sendall(payload)
             else:
                 self._connection.write(payload)
+                self._connection.flush()
             return True
         except (socket.error, serial.SerialException) as exc:
             logger.error("Falha ao enviar comando: %s", exc)
             self.disconnect()
             return False
 
-    def calibrate_printer(self, label_length_mm: float, gap_length_mm: float, stop_position_dots: int | None = None) -> bool:
+    def calibrate_printer(
+        self,
+        label_width_mm: float,
+        label_length_mm: float,
+        gap_length_mm: float,
+        stop_position_dots: int | None = None,
+    ) -> bool:
         """Calibra sensor e tamanho da etiqueta.
 
         Args:
+            label_width_mm: Largura da etiqueta em milímetros (> 0).
             label_length_mm: Comprimento da etiqueta em milímetros (> 0).
             gap_length_mm: Gap entre etiquetas em milímetros (> 0).
             stop_position_dots: Posição de parada em dots.
         """
+        if label_width_mm <= 0:
+            raise ValueError("label_width_mm deve ser maior que zero")
         if label_length_mm <= 0:
             raise ValueError("label_length_mm deve ser maior que zero")
         if gap_length_mm <= 0:
             raise ValueError("gap_length_mm deve ser maior que zero")
 
-        dots_por_mm = self.dpi / 25.4
+        dots_por_mm = self.dpi / self._mm_per_inch
+        width_dots = round(label_width_mm * dots_por_mm)
         label_dots = round(label_length_mm * dots_por_mm)
         gap_dots = round(gap_length_mm * dots_por_mm)
-        total_dots = label_dots + gap_dots
+        if width_dots <= 0 or label_dots <= 0 or gap_dots <= 0:
+            raise ValueError("Parâmetros convertidos para dots devem ser > 0")
         f_value = stop_position_dots if stop_position_dots is not None else max(220, label_dots)
+        if f_value <= 0:
+            raise ValueError("stop_position_dots deve ser > 0 quando informado")
 
-        commands = [f"\x02{self.sensor_type}\r\n", f"Q{total_dots},{gap_dots}\r\n", f"\x02f{f_value}\r\n"]
+        # PPLB:
+        # - q define SOMENTE a largura útil da etiqueta (em dots).
+        # - Q define SOMENTE comprimento da etiqueta e gap (em dots), nessa ordem.
+        # A correção evita o erro antigo de enviar (comprimento + gap) no primeiro parâmetro de Q.
+        commands = [
+            f"\x02{self.sensor_type}\r\n",
+            f"q{width_dots}\r\n",
+            f"Q{label_dots},{gap_dots}\r\n",
+            f"\x02f{f_value}\r\n",
+        ]
+        logger.info(
+            "Calibração Argox/PPLB: width=%smm(%sdots), length=%smm(%sdots), gap=%smm(%sdots), dpi=%s",
+            label_width_mm,
+            width_dots,
+            label_length_mm,
+            label_dots,
+            gap_length_mm,
+            gap_dots,
+            self.dpi,
+        )
         for cmd in commands:
             if not self.send_command(cmd):
+                logger.error("Falha ao enviar comando de calibração: %r", cmd)
                 return False
             time.sleep(self.inter_command_delay)
         logger.info("Calibração concluída")
@@ -133,7 +168,7 @@ class ArgoxPrinter:
         """Imprime etiqueta com payload PPLB completo."""
         if copies < 1:
             raise ValueError("copies deve ser >= 1")
-        if "E\r\n" not in pplb_payload:
+        if not pplb_payload.rstrip().endswith("E"):
             logger.warning("Payload não contém terminador E\\r\\n")
 
         sequence = ["N\r\n", pplb_payload, f"P{copies}\r\n"]
@@ -144,12 +179,42 @@ class ArgoxPrinter:
         return True
 
     @staticmethod
+    def _calc_center_x(label_width_dots: int, element_width_dots: int) -> int:
+        """Calcula X centralizado na área útil (q) da etiqueta."""
+        if label_width_dots <= 0:
+            raise ValueError("label_width_dots deve ser > 0")
+        if element_width_dots <= 0:
+            raise ValueError("element_width_dots deve ser > 0")
+        return max(0, (label_width_dots - element_width_dots) // 2)
+
+    @staticmethod
+    def _estimate_text_width_dots(text: str, font_size: int) -> int:
+        # Heurística PPLB conservadora para centralização horizontal.
+        base_char_width = 8
+        escala = max(1, int(font_size))
+        return max(1, len(text) * base_char_width * escala)
+
+    @staticmethod
+    def _estimate_barcode_width_dots(data: str, narrow: int = 2, wide: int = 4) -> int:
+        # Heurística aproximada para Code128 (inclui zona de silêncio).
+        modulos_aprox = max(1, len(data) * 11 + 35)
+        return max(1, modulos_aprox * max(1, narrow) + (wide * 2))
+
+    @staticmethod
     def build_payload(text_items: list[dict[str, Any]], barcode_items: list[dict[str, Any]]) -> str:
         """Constrói payload PPLB com comandos de texto e código de barras."""
         lines = ["L\r\n"]
         for item in text_items:
-            lines.append(f"H{item['x']},{item['y']},0,{item['font_size']},{item['font_type']},{item['text']}\r\n")
+            x = item.get("x", 0)
+            if item.get("center") and item.get("label_width_dots"):
+                largura = ArgoxPrinter._estimate_text_width_dots(str(item["text"]), int(item.get("font_size", 1)))
+                x = ArgoxPrinter._calc_center_x(int(item["label_width_dots"]), largura)
+            lines.append(f"H{x},{item['y']},0,{item['font_size']},{item['font_type']},{item['text']}\r\n")
         for item in barcode_items:
-            lines.append(f"B{item['x']},{item['y']},0,{item['type']},{item['height']},1,2,{item['data']}\r\n")
+            x = item.get("x", 0)
+            if item.get("center") and item.get("label_width_dots"):
+                largura = ArgoxPrinter._estimate_barcode_width_dots(str(item["data"]), narrow=2, wide=4)
+                x = ArgoxPrinter._calc_center_x(int(item["label_width_dots"]), largura)
+            lines.append(f"B{x},{item['y']},0,{item['type']},{item['height']},1,2,{item['data']}\r\n")
         lines.append("E\r\n")
         return "".join(lines)
