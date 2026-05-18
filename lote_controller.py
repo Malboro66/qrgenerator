@@ -11,6 +11,7 @@ from models.geracao_config import GeracaoConfig
 from models.lote import Lote
 from services.lote_service import LoteService
 from services.lote_store import LoteStore
+from services.print_service import imprimir_png_windows
 from services.xml_importer import importar_itens_nfe
 
 
@@ -34,23 +35,54 @@ class LoteController:
     def deletar_lote(self, lote_id: str):
         self.store.deletar_lote(lote_id)
 
-    def reimprimir_lote(self, lote: Lote, codigos: list[str] | None = None):
+    def reimprimir_lote(
+        self,
+        lote: Lote,
+        codigos: list[str] | None = None,
+        impressora: str = "",
+        largura_cm: float = 4.0,
+        altura_cm: float = 4.0,
+    ):
         codigos_para_imprimir = codigos if codigos is not None else [i.cod_gerado for i in lote.itens]
-        return self._imprimir_codigos(codigos_para_imprimir)
+        return self._imprimir_codigos(codigos_para_imprimir, impressora=impressora, largura_cm=largura_cm, altura_cm=altura_cm)
 
-    def _imprimir_codigos(self, codigos: list[str]):
+    def _imprimir_codigos(self, codigos: list[str], impressora: str = "", largura_cm: float = 4.0, altura_cm: float = 4.0):
         ctrl = AppController.build_default()
-        cfg = GeracaoConfig(4.0, 4.0, 8.0, 3.0, True, True, "black", "white", "barcode", "code128", "texto", "", "", 100.0, 60.0)
-        validos, _invalidos = ctrl.preparar_codigos([{"cod": c} for c in codigos], "cod", cfg)
+        cfg = GeracaoConfig(
+            qr_width_cm=largura_cm,
+            qr_height_cm=altura_cm,
+            barcode_width_cm=largura_cm,
+            barcode_height_cm=altura_cm,
+            keep_qr_ratio=True,
+            keep_barcode_ratio=True,
+            foreground="black",
+            background="white",
+            tipo_codigo="barcode",
+            barcode_model="code128",
+            modo="texto",
+            prefixo="",
+            sufixo="",
+            etiqueta_width_mm=70.0,
+            etiqueta_height_mm=50.0,
+        )
+        validos, _ = ctrl.validar_parametros_geracao(codigos, cfg)
         pasta = Path(tempfile.mkdtemp(prefix="lote_print_"))
         arquivos = []
         for idx, dado in enumerate(validos, 1):
             img = ctrl.gerar_imagem_obj(dado, cfg)
             out = pasta / f"codigo_{idx:03d}.png"
-            img.save(out)
+            img.save(str(out), format="PNG", dpi=(ctrl.service.DPI_PADRAO, ctrl.service.DPI_PADRAO))
             arquivos.append(str(out))
+            imprimir_png_windows(
+                str(out),
+                impressora,
+                largura_cm,
+                altura_cm,
+                dpi=ctrl.service.DPI_PADRAO,
+                logger=ctrl.logger,
+            )
 
-        enviados = self._enviar_para_impressao(arquivos)
+        enviados = True
         return {"arquivos": arquivos, "enviados": enviados}
 
     def _enviar_para_impressao(self, arquivos: list[str]) -> bool:
