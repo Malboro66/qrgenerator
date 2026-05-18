@@ -4,12 +4,14 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from lote_controller import LoteController
+from services.print_service import listar_impressoras_windows
 
 
 class LoteApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.controller = LoteController()
+        self.impressora_var = tk.StringVar(value="")
         self.root.title("Gestão de Lotes Industriais")
         self._configurar_estilos()
         self._build_main()
@@ -30,6 +32,12 @@ class LoteApp:
         ttk.Button(top, text="Exibir Lote", style="Secondary.TButton", command=self._exibir_lote).pack(side="left", padx=4)
         ttk.Button(top, text="Relatório", style="Secondary.TButton", command=self._abrir_relatorio).pack(side="left", padx=4)
         ttk.Button(top, text="Excluir Lote", style="Secondary.TButton", command=self._excluir_lote).pack(side="left", padx=4)
+        ttk.Label(top, text="Impressora:").pack(side="left", padx=(12, 4))
+        impressoras, padrao = listar_impressoras_windows()
+        if impressoras and not self.impressora_var.get():
+            self.impressora_var.set(padrao or impressoras[0])
+        self.impressora_combo = ttk.Combobox(top, textvariable=self.impressora_var, values=impressoras, state="readonly", width=36)
+        self.impressora_combo.pack(side="left", padx=4)
         self.tree = ttk.Treeview(self.root, columns=("ident", "criado", "nf", "qtd", "status"), show="headings")
         for c, t in [("ident", "IDENT"), ("criado", "Criação"), ("nf", "NF Ref."), ("qtd", "Qtd. itens"), ("status", "Status")]:
             self.tree.heading(c, text=t)
@@ -91,7 +99,7 @@ class LoteApp:
                 self._refresh_lotes()
                 messagebox.showwarning("Atenção", "Nenhum item selecionado para impressão.")
                 return
-            resultado = self.controller.reimprimir_lote(lote, codigos=codigos)
+            resultado = self.controller.reimprimir_lote(lote, codigos=codigos, impressora=self.impressora_var.get().strip())
             self.controller.atualizar_status(lote.id, "impresso")
             self._refresh_lotes()
             if resultado["enviados"]:
@@ -120,7 +128,11 @@ class LoteApp:
         tv.pack(fill="both", expand=True)
         for i in lote.itens:
             tv.insert("", "end", values=(i.cod_item, i.descr_item, i.qty, i.nf_numero, i.cod_gerado))
-        ttk.Button(win, text="Imprimir novamente", command=lambda: self.controller.reimprimir_lote(lote)).pack()
+        ttk.Button(
+            win,
+            text="Imprimir novamente",
+            command=lambda: self.controller.reimprimir_lote(lote, impressora=self.impressora_var.get().strip()),
+        ).pack()
 
     def _abrir_relatorio(self):
         win = tk.Toplevel(self.root)
