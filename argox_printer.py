@@ -144,7 +144,6 @@ class ArgoxPrinter:
             f"\x02{self.sensor_type}\r\n",
             f"q{width_dots}\r\n",
             f"Q{label_dots},{gap_dots}\r\n",
-            f"\x02f{f_value}\r\n",
         ]
         logger.info(
             "Calibração Argox/PPLB: width=%smm(%sdots), length=%smm(%sdots), gap=%smm(%sdots), dpi=%s",
@@ -168,13 +167,13 @@ class ArgoxPrinter:
         """Imprime etiqueta com payload PPLB completo."""
         if copies < 1:
             raise ValueError("copies deve ser >= 1")
-        if not pplb_payload.rstrip().endswith("E"):
-            logger.warning("Payload não contém terminador E\\r\\n")
-
-        sequence = ["N\r\n", pplb_payload, f"P{copies}\r\n"]
+        
+        # "N" limpa o buffer, o payload monta a arte, "E" fecha o bloco e "P" imprime
+        sequence = ["N\r\n", pplb_payload, "E\r\n", f"P{copies}\r\n"]
         for cmd in sequence:
             if not self.send_command(cmd):
                 return False
+            time.sleep(self.inter_command_delay)
         logger.info("Etiqueta enviada para impressão")
         return True
 
@@ -203,7 +202,7 @@ class ArgoxPrinter:
     @staticmethod
     def build_payload(text_items: list[dict[str, Any]], barcode_items: list[dict[str, Any]]) -> str:
         """Constrói payload PPLB com comandos de texto e código de barras."""
-        lines = ["L\r\n"]
+        lines = []
         for item in text_items:
             x = item.get("x", 0)
             if item.get("center") and item.get("label_width_dots"):
@@ -216,5 +215,4 @@ class ArgoxPrinter:
                 largura = ArgoxPrinter._estimate_barcode_width_dots(str(item["data"]), narrow=2, wide=4)
                 x = ArgoxPrinter._calc_center_x(int(item["label_width_dots"]), largura)
             lines.append(f"B{x},{item['y']},0,{item['type']},{item['height']},1,2,{item['data']}\r\n")
-        lines.append("E\r\n")
         return "".join(lines)
