@@ -89,12 +89,8 @@ class PreviewInterativo(tk.Canvas):
             "codigo_y_mm": round(self._cy, 1),
         }
 
-    def _get_scale(self) -> float:
-        cw = self.winfo_width() or 500
-        ch = self.winfo_height() or 360
+    def _get_scale(self, cw: float, ch: float) -> float:
         pad = 54
-        if self._lw <= 0 or self._lh <= 0:
-            return 1.0
         return min((cw - pad * 2) / self._lw, (ch - pad * 2) / self._lh)
 
     def _lbl2px(self, xmm: float, ymm: float) -> tuple[float, float]:
@@ -108,7 +104,7 @@ class PreviewInterativo(tk.Canvas):
         self.delete("all")
         self._handles = []
 
-        s = self._get_scale()
+        s = self._get_scale(cw, ch)
         self._scale = s
         lw_px = self._lw * s
         lh_px = self._lh * s
